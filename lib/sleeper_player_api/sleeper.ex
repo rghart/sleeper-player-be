@@ -22,6 +22,19 @@ defmodule SleeperPlayerApi.Sleeper do
   end
 
   @doc """
+  Returns the list of active players.
+
+  ## Examples
+
+      iex> list_active_players()
+      [%Player{active: true}, ...]
+
+  """
+  def list_active_players do
+    Repo.all(from Player, where: [active: true])
+  end
+
+  @doc """
   Gets a single player.
 
   Raises `Ecto.NoResultsError` if the Player does not exist.
