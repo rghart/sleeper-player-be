@@ -15,6 +15,12 @@ defmodule SleeperPlayerApi.SleeperTest do
       assert Sleeper.list_players() == [player]
     end
 
+    test "list_active_players/0 returns all active players" do
+      _player = player_fixture(%{active: false})
+      player2 = player_fixture(%{active: true})
+      assert Sleeper.list_active_players() == [player2]
+    end
+
     test "get_player!/1 returns the player with given id" do
       player = player_fixture()
       assert Sleeper.get_player!(player.id) == player
