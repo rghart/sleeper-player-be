@@ -50,4 +50,38 @@ defmodule SleeperPlayerApi.SleeperFixtures do
 
     player
   end
+
+  @doc """
+  Generate a unique player player_id.
+  """
+  def unique_player_player_id, do: "some player_id#{System.unique_integer([:positive])}"
+
+  @doc """
+  Generate a player.
+  """
+  def player_fixture(attrs \\ %{}) do
+    {:ok, player} =
+      attrs
+      |> Enum.into(%{
+        active: true,
+        age: 42,
+        fantasy_positions: ["option1", "option2"],
+        first_name: "some first_name",
+        full_name: "some full_name",
+        last_name: "some last_name",
+        player_id: unique_player_player_id(),
+        player_json: "some player_json",
+        position: "some position",
+        search_first_name: "some search_first_name",
+        search_full_name: "some search_full_name",
+        search_last_name: "some search_last_name",
+        search_rank: 42,
+        status: "some status",
+        team: "some team",
+        years_exp: 42
+      })
+      |> SleeperPlayerApi.Sleeper.create_player()
+
+    player
+  end
 end

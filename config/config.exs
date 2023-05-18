@@ -38,6 +38,13 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Quantum cron jobs
+config :sleeper_player_api, SleeperPlayerApi.Scheduler,
+  jobs: [
+    # Runs daily at 3am Central time:
+    {"0 8 * * *", {SleeperPlayerApi.Tasks.GetSleeperPlayerData, :get_sleeper_player_data, []}}
+  ]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
