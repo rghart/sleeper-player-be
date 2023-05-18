@@ -4,7 +4,7 @@ defmodule SleeperPlayerApi.Repo.Migrations.CreatePlayers do
   def change do
     create table(:players, primary_key: false) do
       add :id, :binary_id, primary_key: true
-      add :player_data, :map
+      add :player_json, :map
       add :active, :boolean, default: false, null: false
       add :age, :integer
       add :fantasy_positions, {:array, :string}
@@ -19,6 +19,7 @@ defmodule SleeperPlayerApi.Repo.Migrations.CreatePlayers do
       add :search_rank, :integer
       add :status, :string
       add :years_exp, :integer
+      add :team, :string
 
       timestamps()
     end

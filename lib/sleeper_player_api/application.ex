@@ -17,9 +17,9 @@ defmodule SleeperPlayerApi.Application do
       # Start Finch
       {Finch, name: SleeperPlayerApi.Finch},
       # Start the Endpoint (http/https)
-      SleeperPlayerApiWeb.Endpoint
-      # Start a worker by calling: SleeperPlayerApi.Worker.start_link(arg)
-      # {SleeperPlayerApi.Worker, arg}
+      SleeperPlayerApiWeb.Endpoint,
+      # Start Quantum scheduler
+      SleeperPlayerApi.Scheduler
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
