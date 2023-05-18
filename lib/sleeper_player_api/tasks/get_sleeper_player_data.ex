@@ -39,5 +39,3 @@ defmodule SleeperPlayerApi.Tasks.GetSleeperPlayerData do
     "Player: #{player.full_name}, ID: #{player.player_id}"
   end
 end
-
-# SleeperPlayerApi.Tasks.GetSleeperPlayerData.get_sleeper_player_data
