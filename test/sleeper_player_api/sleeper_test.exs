@@ -27,24 +27,21 @@ defmodule SleeperPlayerApi.SleeperTest do
     end
 
     test "create_player/1 with valid data creates a player" do
-      valid_attrs = %{active: true, age: 42, fantasy_positions: ["option1", "option2"], first_name: "some first_name", full_name: "some full_name", last_name: "some last_name", player_id: "some player_id", player_json: "some player_json", position: "some position", search_first_name: "some search_first_name", search_full_name: "some search_full_name", search_last_name: "some search_last_name", search_rank: 42, status: "some status", team: "some team", years_exp: 42}
+      valid_attrs = %{id: 1234, active: true, age: 42, first_name: "some first_name", full_name: "some full_name", last_name: "some last_name", player_id: "some player_id", player_json: "some player_json", position: "some position", search_first_name: "some search_first_name", search_full_name: "some search_full_name", search_last_name: "some search_last_name", search_rank: 42, years_exp: 42}
 
       assert {:ok, %Player{} = player} = Sleeper.create_player(valid_attrs)
+      assert player.id == 1234
       assert player.active == true
       assert player.age == 42
-      assert player.fantasy_positions == ["option1", "option2"]
       assert player.first_name == "some first_name"
       assert player.full_name == "some full_name"
       assert player.last_name == "some last_name"
       assert player.player_id == "some player_id"
       assert player.player_json == "some player_json"
-      assert player.position == "some position"
       assert player.search_first_name == "some search_first_name"
       assert player.search_full_name == "some search_full_name"
       assert player.search_last_name == "some search_last_name"
       assert player.search_rank == 42
-      assert player.status == "some status"
-      assert player.team == "some team"
       assert player.years_exp == 42
     end
 
@@ -54,24 +51,20 @@ defmodule SleeperPlayerApi.SleeperTest do
 
     test "update_player/2 with valid data updates the player" do
       player = player_fixture()
-      update_attrs = %{active: false, age: 43, fantasy_positions: ["option1"], first_name: "some updated first_name", full_name: "some updated full_name", last_name: "some updated last_name", player_id: "some updated player_id", player_json: "some updated player_json", position: "some updated position", search_first_name: "some updated search_first_name", search_full_name: "some updated search_full_name", search_last_name: "some updated search_last_name", search_rank: 43, status: "some updated status", team: "some updated team", years_exp: 43}
+      update_attrs = %{id: 1234, active: false, age: 43, fantasy_positions: ["option1"], first_name: "some updated first_name", full_name: "some updated full_name", last_name: "some updated last_name", player_id: "some updated player_id", player_json: "some updated player_json", position: "some updated position", search_first_name: "some updated search_first_name", search_full_name: "some updated search_full_name", search_last_name: "some updated search_last_name", search_rank: 43, status: "some updated status", team: "some updated team", years_exp: 43}
 
       assert {:ok, %Player{} = player} = Sleeper.update_player(player, update_attrs)
       assert player.active == false
       assert player.age == 43
-      assert player.fantasy_positions == ["option1"]
       assert player.first_name == "some updated first_name"
       assert player.full_name == "some updated full_name"
       assert player.last_name == "some updated last_name"
       assert player.player_id == "some updated player_id"
       assert player.player_json == "some updated player_json"
-      assert player.position == "some updated position"
       assert player.search_first_name == "some updated search_first_name"
       assert player.search_full_name == "some updated search_full_name"
       assert player.search_last_name == "some updated search_last_name"
       assert player.search_rank == 43
-      assert player.status == "some updated status"
-      assert player.team == "some updated team"
       assert player.years_exp == 43
     end
 
@@ -91,5 +84,35 @@ defmodule SleeperPlayerApi.SleeperTest do
       player = player_fixture()
       assert %Ecto.Changeset{} = Sleeper.change_player(player)
     end
+  end
+
+  describe "positions" do
+    alias SleeperPlayerApi.Sleeper.Position
+
+    import SleeperPlayerApi.SleeperFixtures
+
+    @invalid_attrs %{abbreviation: nil}
+
+    test "list_positions/0 returns all positions" do
+      position = position_fixture()
+      assert Sleeper.list_positions() == [position]
+    end
+
+    test "get_position_id/1 returns the position with given id" do
+      position = position_fixture()
+      assert Sleeper.get_position_by_abbreviation(position.abbreviation) == position
+    end
+
+    test "create_position/1 with valid data creates a position" do
+      valid_attrs = %{abbreviation: "some position"}
+
+      assert {:ok, %Position{} = position} = Sleeper.create_position(valid_attrs)
+      assert position.abbreviation == "some position"
+    end
+
+    test "create_position/1 with invalid data returns error changeset" do
+      assert {:error, %Ecto.Changeset{}} = Sleeper.create_position(@invalid_attrs)
+    end
+
   end
 end
