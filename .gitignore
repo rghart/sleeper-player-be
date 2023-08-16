@@ -27,3 +27,5 @@ sleeper_player_api-*.tar
 
 .idea/
 
+/config/*.secret.exs
+
