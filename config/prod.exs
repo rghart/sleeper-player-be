@@ -6,7 +6,6 @@ import Config
 
 config :sleeper_player_api, SleeperPlayerApiWeb.Endpoint,
        url: [host: "fantasyteamassistant.com", port: 443],
-       cache_static_manifest: "priv/static/cache_manifest.json",
        server: true,
        force_ssl: [hsts: true],
        http: [port: 4000, transport_options: [socket_opts: [:inet6]]],
