@@ -17,7 +17,7 @@ defmodule SleeperPlayerApi.Application do
       # Start Finch
       {Finch, name: SleeperPlayerApi.Finch},
       # Start the Endpoint (http/https)
-      SleeperPlayerApiWeb.Endpoint,
+      {SiteEncrypt.Phoenix, SleeperPlayerApiWeb.Endpoint},
       # Start Quantum scheduler
       SleeperPlayerApi.Scheduler
     ]
