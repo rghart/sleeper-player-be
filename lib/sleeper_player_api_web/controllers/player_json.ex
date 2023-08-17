@@ -16,6 +16,13 @@ defmodule SleeperPlayerApiWeb.PlayerJSON do
   end
 
   @doc """
+  Renders a map of active players.
+  """
+  def legacy(%{players: players}) do
+    %{data: Map.new(players, fn p -> {p.player_id, data(p)} end)}
+  end
+
+  @doc """
   Renders a single player.
   """
   def show(%{player: player}) do
