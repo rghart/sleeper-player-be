@@ -16,6 +16,11 @@ defmodule SleeperPlayerApiWeb.PlayerController do
     render(conn, :active, players: players)
   end
 
+  def legacy(conn, _params) do
+    players = Sleeper.list_active_players()
+    render(conn, :legacy, players: players)
+  end
+
   def show(conn, %{"id" => id}) do
     player = Sleeper.get_player!(id)
     render(conn, :show, player: player)
@@ -25,7 +30,7 @@ defmodule SleeperPlayerApiWeb.PlayerController do
     with {:ok, %Player{} = player} <- Sleeper.create_player(player_params) do
       conn
       |> put_status(:created)
-      |> put_resp_header("location", ~p"/api/players/#{player}")
+      |> put_resp_header("location", ~p"/api/v1/players/#{player}")
       |> render(:show, player: player)
     end
   end

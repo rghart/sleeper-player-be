@@ -8,14 +8,14 @@ defmodule SleeperPlayerApiWeb.PlayerControllerTest do
 
   describe "index" do
     test "lists all players", %{conn: conn} do
-      conn = get(conn, ~p"/api/players")
+      conn = get(conn, ~p"/api/v1/players")
       assert json_response(conn, 200)["data"] == []
     end
   end
 
   describe "active" do
     test "lists all active players", %{conn: conn} do
-      conn = get(conn, ~p"/api/players/active")
+      conn = get(conn, ~p"/api/v1/players/active")
       assert json_response(conn, 200)["data"] == []
     end
   end

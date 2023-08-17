@@ -5,11 +5,16 @@ defmodule SleeperPlayerApiWeb.Router do
     plug :accepts, ["json"]
   end
 
-  scope "/api", SleeperPlayerApiWeb do
+  scope "/api/v1", SleeperPlayerApiWeb do
     pipe_through :api
     get "/players", PlayerController, :index
     get "/players/active", PlayerController, :active
     get "/players/:id", PlayerController, :show
+  end
+
+  scope "/api/legacy", SleeperPlayerApiWeb do
+    pipe_through :api
+    get "/players", PlayerController, :legacy
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
