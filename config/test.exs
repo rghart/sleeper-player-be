@@ -17,6 +17,7 @@ config :sleeper_player_api, SleeperPlayerApi.Repo,
 # you can enable the server option below.
 config :sleeper_player_api, SleeperPlayerApiWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
+  https: [port: 4001],
   secret_key_base: "gBiZH1yu66CN0Xi010oZMYuRVQhpUExQHxrlie/mnbvdQ/4ZbNxG1zXFlWedmdSg",
   server: false
 

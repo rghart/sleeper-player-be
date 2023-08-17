@@ -45,7 +45,8 @@ defmodule SleeperPlayerApi.MixProject do
       {:jason, "~> 1.2"},
       {:plug_cowboy, "~> 2.5"},
       {:httpoison, "~> 2.1"},
-      {:quantum, "~> 3.5"}
+      {:quantum, "~> 3.5"},
+      {:site_encrypt, "~> 0.5"}
     ]
   end
 
