@@ -27,6 +27,14 @@ config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: SleeperPlayerApi
 # Do not print debug messages in production
 config :logger, level: :info
 
+config :cors_plug,
+       origin: [
+         ~r/^https:\/\/sleeper-player-db.*.web.app$/,
+         "https://sleeper-player-db.firebaseapp.com",
+         "https://fantasyteamassistant.com"
+       ]
+
+
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.
 
