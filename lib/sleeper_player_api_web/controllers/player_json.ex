@@ -32,7 +32,6 @@ defmodule SleeperPlayerApiWeb.PlayerJSON do
   defp data(%Player{} = player) do
     %{
       id: player.id,
-      player_json: player.player_json,
       active: player.active,
       age: player.age,
       fantasy_positions: Enum.map(Map.get(player, :fantasy_positions, []), fn p -> p.abbreviation end),

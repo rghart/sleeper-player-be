@@ -9,6 +9,25 @@ defmodule SleeperPlayerApi.Sleeper do
   alias SleeperPlayerApi.Sleeper.{Player, Position, Team, Status}
 
   @player_preloads [:status, :team, :position, :fantasy_positions]
+  @all_fields_except_player_json [
+    :id,
+    :active,
+    :age,
+    :first_name,
+    :last_name,
+    :full_name,
+    :player_id,
+    :search_first_name,
+    :search_last_name,
+    :search_full_name,
+    :search_rank,
+    :years_exp,
+    :status_id,
+    :team_id,
+    :position_id,
+    :inserted_at,
+    :updated_at
+  ]
 
   @doc """
   Returns the list of players.
@@ -20,7 +39,7 @@ defmodule SleeperPlayerApi.Sleeper do
 
   """
   def list_players do
-    Repo.all(Player)
+    Repo.all(from Player, select: ^@all_fields_except_player_json)
     |> Repo.preload(@player_preloads)
   end
 
@@ -34,7 +53,7 @@ defmodule SleeperPlayerApi.Sleeper do
 
   """
   def list_active_players do
-    Repo.all(from Player, where: [active: true], preload: ^@player_preloads)
+    Repo.all(from Player, where: [active: true], preload: ^@player_preloads, select: ^@all_fields_except_player_json)
   end
 
   @doc """

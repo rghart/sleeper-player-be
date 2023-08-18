@@ -12,12 +12,15 @@ defmodule SleeperPlayerApi.SleeperTest do
 
     test "list_players/0 returns all players" do
       player = player_fixture()
+      player = Map.put(player, :player_json, nil)
       assert Sleeper.list_players() == [player]
     end
 
     test "list_active_players/0 returns all active players" do
       _player = player_fixture(%{active: false})
+      _player = Map.put(_player, :player_json, nil)
       player2 = player_fixture(%{active: true})
+      player2 = Map.put(player2, :player_json, nil)
       assert Sleeper.list_active_players() == [player2]
     end
 
