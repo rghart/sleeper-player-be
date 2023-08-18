@@ -33,6 +33,9 @@ config :logger, level: :warning
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 
+config :cors_plug, origin: ~r/^localhost:[[:digit:]]+$/
+
+
 if System.get_env("CI") do
   import_config "test.secret.exs"
 end

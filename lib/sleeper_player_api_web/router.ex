@@ -3,7 +3,7 @@ defmodule SleeperPlayerApiWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
-    plug CORSPlug, origin: ['https://sleeper-player-db.web.app', 'https://sleeper-player-db.firebaseapp.com']
+    plug CORSPlug
   end
 
   scope "/api/v1", SleeperPlayerApiWeb do
