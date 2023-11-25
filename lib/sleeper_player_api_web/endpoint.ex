@@ -10,8 +10,9 @@ defmodule SleeperPlayerApiWeb.Endpoint do
   @impl SiteEncrypt
   def certification do
     SiteEncrypt.configure(
+      mode: :manual,
       client: :native,
-      domains: ["fantasyteamassistant.com", "www.fantasyteamassistant.com"],
+      domains: ["www.fantasyteamassistant.com", "fantasyteamassistant.com"],
       emails: ["fantasyteamassistant@gmail.com"],
       db_folder: Application.get_env(:sleeper_player_api, :cert_path, "tmp/site_encrypt_db"),
       directory_url:
