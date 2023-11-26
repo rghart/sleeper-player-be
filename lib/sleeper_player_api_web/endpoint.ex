@@ -52,7 +52,7 @@ defmodule SleeperPlayerApiWeb.Endpoint do
   # You should set gzip to true if you are running phx.digest
   # when deploying your static files in production.
   plug Plug.Static,
-    at: "/",
+    at: "/api",
     from: :sleeper_player_api,
     gzip: false,
     only: SleeperPlayerApiWeb.static_paths()
