@@ -6,6 +6,10 @@ defmodule SleeperPlayerApiWeb.Router do
     plug CORSPlug
   end
 
+  scope "/", SleeperPlayerApiWeb do
+    get "/", DefaultController, :index
+  end
+
   scope "/api", SleeperPlayerApiWeb do
     pipe_through :api
     get "/", DefaultController, :index
