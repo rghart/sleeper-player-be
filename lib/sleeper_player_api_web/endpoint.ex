@@ -10,7 +10,7 @@ defmodule SleeperPlayerApiWeb.Endpoint do
   @impl SiteEncrypt
   def certification do
     SiteEncrypt.configure(
-      client: :certbot,
+      client: :native,
       domains: ["www.fantasyteamassistant.com", "fantasyteamassistant.com"],
       emails: ["fantasyteamassistant@gmail.com"],
       db_folder: Application.get_env(:sleeper_player_api, :cert_path, "tmp/site_encrypt_db"),
@@ -52,7 +52,7 @@ defmodule SleeperPlayerApiWeb.Endpoint do
   # You should set gzip to true if you are running phx.digest
   # when deploying your static files in production.
   plug Plug.Static,
-    at: "/api",
+    at: "/",
     from: :sleeper_player_api,
     gzip: false,
     only: SleeperPlayerApiWeb.static_paths()

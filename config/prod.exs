@@ -5,7 +5,7 @@ import Config
 # when generating URLs.
 
 config :sleeper_player_api, SleeperPlayerApiWeb.Endpoint,
-       url: [host: "fantasyteamassistant.com/api", port: 443],
+       url: [host: "fantasyteamassistant.com", port: 443],
        server: true,
        force_ssl: [hsts: true],
        http: [port: 4000, transport_options: [socket_opts: [:inet6]]],
