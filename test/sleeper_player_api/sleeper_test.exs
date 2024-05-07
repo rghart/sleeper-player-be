@@ -85,7 +85,10 @@ defmodule SleeperPlayerApi.SleeperTest do
 
     test "change_player/1 returns a player changeset" do
       player = player_fixture()
-      assert %Ecto.Changeset{} = Sleeper.change_player(player)
+      assert %Ecto.Changeset{changes: result} = Sleeper.change_player(player, %{"team" => "some other team", "status" => "some status", "position" => "some position"})
+      assert result.team_id == List.first(Sleeper.list_teams()).id
+      assert result.status_id == List.first(Sleeper.list_statuses()).id
+      assert result.position_id == List.first(Sleeper.list_positions()).id
     end
   end
 

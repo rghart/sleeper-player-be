@@ -162,13 +162,26 @@ defmodule SleeperPlayerApi.Sleeper do
     position = attrs["position"]
 
     new_attrs = [
-      {status, "status_id", &get_status_by_status/1},
-      {team, "team_id", &get_team_by_abbreviation/1},
-      {position, "position_id", &get_position_by_abbreviation/1}
+      {status, "status_id", &get_status_by_status/1, &create_status/1, :status},
+      {team, "team_id", &get_team_by_abbreviation/1, &create_team/1, :abbreviation},
+      {position, "position_id", &get_position_by_abbreviation/1, &create_position/1, :abbreviation}
     ]
 
     attrs = Enum.reduce(new_attrs, attrs,
-      fn {attr, k, func}, attrs -> if attr, do: Map.put(attrs, k, func.(attr).id), else: attrs end
+      fn {attr, k, read_func, create_func, create_k}, attrs ->
+        get_id = fn
+          nil ->
+            case create_func.(Map.put(%{}, create_k, attr)) do
+              {:ok, result} -> Map.get(result, :id)
+              _ -> nil
+            end
+
+          result ->
+          IO.inspect(result)
+            Map.get(result, :id)
+        end
+        if attr, do: Map.put(attrs, k, get_id.(read_func.(attr))), else: attrs
+      end
     )
 
     player = Repo.preload(player, @player_preloads)
