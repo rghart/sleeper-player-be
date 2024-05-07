@@ -177,7 +177,6 @@ defmodule SleeperPlayerApi.Sleeper do
             end
 
           result ->
-          IO.inspect(result)
             Map.get(result, :id)
         end
         if attr, do: Map.put(attrs, k, get_id.(read_func.(attr))), else: attrs

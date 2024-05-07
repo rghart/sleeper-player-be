@@ -11,9 +11,11 @@ defmodule SleeperPlayerApi.Tasks.GetSleeperPlayerData do
 #  }
 
   def get_sleeper_player_data do
+    Logger.info("Beginning Sleeper Player Update")
     Sleeper.get!("/players/nfl").body
     |> Map.values()
     |> Enum.each(&add_or_update_player_in_repo/1)
+    Logger.info("Sleeper Player Update Complete")
   end
 
   def add_or_update_player_in_repo(player_data) do
@@ -31,11 +33,11 @@ defmodule SleeperPlayerApi.Tasks.GetSleeperPlayerData do
         end
 
         case player_result do
-          {:ok, _} ->
-            Logger.info("Success")
           {:error, changeset} ->
             Logger.error("Error", [player: loggable_player_info(changeset.changes)])
             Logger.error("Error", changeset)
+          _ ->
+            :ok
         end
       :error ->
         Logger.info("Skipping defense data")
