@@ -47,7 +47,8 @@ defmodule SleeperPlayerApi.MixProject do
       {:httpoison, "~> 2.1"},
       {:quantum, "~> 3.5"},
       {:site_encrypt, "~> 0.5"},
-      {:cors_plug, "~> 3.0"}
+      {:cors_plug, "~> 3.0"},
+      {:bypass, "~> 2.1", only: :test}
     ]
   end
 

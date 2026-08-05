@@ -38,6 +38,11 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Sleeper API client rate limiter. Sleeper's documented ceiling is 1000
+# calls/min; this is deliberately well under that — see the moduledoc on
+# SleeperPlayerApi.RateLimiter for why.
+config :sleeper_player_api, SleeperPlayerApi.RateLimiter, calls_per_minute: 300
+
 # Quantum cron jobs
 config :sleeper_player_api, SleeperPlayerApi.Scheduler,
   jobs: [
