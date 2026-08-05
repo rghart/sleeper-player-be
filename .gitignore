@@ -29,3 +29,10 @@ sleeper_player_api-*.tar
 
 /config/*.secret.exs
 
+
+# Harvested Sleeper corpus for the leaguemate-intel golden tests.
+# NOT source controlled: this repo is public, and the corpus is a compiled
+# behavioural profile of 13 real, named leaguemates (user ids, display names,
+# and their full draft history across 70 drafts). Each datum is individually
+# public via the Sleeper API; the aggregate is not ours to publish.
+/test/support/corpus/
