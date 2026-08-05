@@ -207,6 +207,7 @@ defmodule SleeperPlayerApi.Intel.EstimatorTest do
   end
 
   describe "manager_multiplier/3 — against corpus reference anchors" do
+    @describetag :corpus
     setup do
       {:ok, drafts: IntelCorpus.drafts()}
     end
@@ -289,6 +290,7 @@ defmodule SleeperPlayerApi.Intel.EstimatorTest do
   # ---------------------------------------------------------------------
 
   describe "rookie_class_rank/1 and adp_gap/2 — against the reference corpus" do
+    @describetag :corpus
     setup do
       {:ok, ranks: IntelCorpus.rookie_class_entries() |> Estimator.rookie_class_rank()}
     end
@@ -329,6 +331,7 @@ defmodule SleeperPlayerApi.Intel.EstimatorTest do
   # ---------------------------------------------------------------------
 
   describe "golden test — reproduces fixture.json end to end" do
+    @describetag :corpus
     setup do
       fixture = IntelCorpus.fixture()
 
