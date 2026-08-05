@@ -16,6 +16,8 @@ defmodule SleeperPlayerApi.Application do
       {Phoenix.PubSub, name: SleeperPlayerApi.PubSub},
       # Start Finch
       {Finch, name: SleeperPlayerApi.Finch},
+      # Start the shared Sleeper API rate limiter
+      SleeperPlayerApi.RateLimiter,
       # Start the Endpoint (http/https)
       {SiteEncrypt.Phoenix, SleeperPlayerApiWeb.Endpoint},
       # Start Quantum scheduler
