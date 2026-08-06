@@ -296,6 +296,44 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDraftsTest do
     end
   end
 
+  describe "picks Sleeper can't attribute to a user" do
+    # Regression: a live production crawl died on the first draft it hit.
+    # Real Sleeper data uses `picked_by: ""` (not null) for an autopicked or
+    # otherwise unattributed pick — 3 of the 3,286 picks in the harvested
+    # corpus are like this. `String.to_integer("")` raises, and it took the
+    # whole crawl down.
+    #
+    # This never surfaced because every other test either used a real id or
+    # nil, and the DB-seeding test helpers parse `picked_by` themselves
+    # rather than going through the crawler.
+    test "an empty-string picked_by is stored as nil, not a crash", %{bypass: bypass} do
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"}
+      ])
+
+      expect_json(bypass, "/user/100/drafts/nfl/2026", [draft("1001", "complete")])
+
+      expect_json(bypass, "/draft/1001/picks", [
+        pick(1, "P1", "100"),
+        pick(2, "P2", ""),
+        pick(3, "P3", nil)
+      ])
+
+      assert {:ok, summary} = CrawlLeaguemateDrafts.crawl(555, "2026")
+
+      assert summary.errors == []
+      assert summary.picks_stored == 3
+
+      picks = Repo.all(from(p in ObservedPick, where: p.draft_id == 1001, order_by: p.pick_no))
+
+      assert [
+               %{player_id: "P1", picked_by: 100},
+               %{player_id: "P2", picked_by: nil},
+               %{player_id: "P3", picked_by: nil}
+             ] = picks
+    end
+  end
+
   describe "rookie filtering" do
     test "only rookie drafts (settings.player_type == 1) are crawled or stored", %{
       bypass: bypass

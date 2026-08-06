@@ -400,7 +400,21 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts do
 
   defp to_int(nil), do: nil
   defp to_int(i) when is_integer(i), do: i
-  defp to_int(s) when is_binary(s), do: String.to_integer(s)
+
+  # Real Sleeper data has `picked_by: ""` — an autopicked/unattributed pick.
+  # 3 of the 3,286 picks in the harvested corpus are like this, and a live
+  # crawl hit one immediately. `String.to_integer("")` raises, which took
+  # down a whole production crawl. Anything unparseable means "no user we
+  # can attribute this to", which is exactly `nil`: the pick still counts
+  # toward the league-wide base hazard, it just can't count toward any
+  # manager's seen/took. That matches how the JSON corpus loader and
+  # `Intel.drafts_corpus/1` already treat an unknown picker.
+  defp to_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {i, ""} -> i
+      _ -> nil
+    end
+  end
 
   defp utc_now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end
