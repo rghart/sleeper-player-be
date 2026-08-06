@@ -225,33 +225,7 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
     end
 
     test "a candidate absent from FantasyCalc entirely is excluded from targets", %{conn: conn} do
-      # Seed one more fantasy-position corpus player who has no FantasyCalc
-      # entry at all (not in fc2.json) — before this step it would have
-      # ranked into targets on raw ADP alone, same shape as the production
-      # "Kyle Dixon" case in the report for this step.
-      Intel.upsert_observed_drafts([%{id: 99_999, teams: 12, status: "complete"}])
-
-      Intel.upsert_observed_picks(99_999, [
-        %{pick_no: 1, player_id: "90001", picked_by: nil}
-      ])
-
-      %SleeperPlayerApi.Sleeper.Player{}
-      |> SleeperPlayerApi.Sleeper.Player.changeset(%{
-        id: 90_001,
-        player_id: "90001",
-        player_json: "{}",
-        active: true,
-        first_name: "No",
-        last_name: "Value",
-        full_name: "No Value",
-        search_first_name: "no",
-        search_last_name: "value",
-        search_full_name: "no value",
-        position_id:
-          (SleeperPlayerApi.Sleeper.get_position_by_abbreviation("WR") ||
-             elem(SleeperPlayerApi.Sleeper.create_position(%{abbreviation: "WR"}), 1)).id
-      })
-      |> Repo.insert!()
+      seed_valueless_corpus_player!()
 
       conn =
         get(
@@ -262,6 +236,118 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       body = json_response(conn, 200)
       target_ids = MapSet.new(body["targets"], & &1["id"])
       refute MapSet.member?(target_ids, "90001")
+    end
+
+    test "but naming that same player in player_ids returns him — explicit ids replace the filters",
+         %{conn: conn} do
+      # The market filter is a *selection* aid: it stops a thin-sample junk
+      # player out-ranking real targets when 20 are being chosen from
+      # hundreds. A caller naming its players has chosen already, so
+      # filtering further could only drop someone it explicitly asked
+      # about — and it could not tell that from "the corpus never saw him".
+      seed_valueless_corpus_player!()
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=90001"
+        )
+
+      body = json_response(conn, 200)
+      assert Enum.map(body["targets"], & &1["id"]) == ["90001"]
+      assert hd(body["targets"])["marketPick"] == nil
+    end
+  end
+
+  describe "GET /api/v1/drafts/:draft_id/availability — caller-chosen targets (plan §6 step 3)" do
+    @describetag :corpus
+
+    setup %{bypass: bypass} do
+      seed_corpus_from_json!()
+      seed_target_players!()
+      stub_district_13(bypass)
+      :ok
+    end
+
+    test "restricts targets to exactly the named players, still ordered by league ADP", %{
+      conn: conn
+    } do
+      # Deliberately out of ADP order in the query string: the caller sends
+      # its rank list in *its* order, and the response's ordering must stay
+      # the endpoint's own (league ADP ascending), not echo the input.
+      asked = ["13434", "13353", "13319"]
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=#{Enum.join(asked, ",")}"
+        )
+
+      body = json_response(conn, 200)
+
+      assert Enum.map(body["targets"], & &1["id"]) == ["13353", "13319", "13434"]
+
+      assert Enum.map(body["targets"], & &1["leagueAdp"]) ==
+               Enum.sort(Enum.map(body["targets"], & &1["leagueAdp"]))
+    end
+
+    test "an asked-for player the corpus has never seen is simply absent — the honest 'no read'",
+         %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=13353,999999"
+        )
+
+      body = json_response(conn, 200)
+
+      # Not an error and not a fabricated row: the caller renders the
+      # missing id as "no read" against the rank-list row it already has.
+      assert Enum.map(body["targets"], & &1["id"]) == ["13353"]
+    end
+
+    test "limit defaults to the number of ids asked about, not 20", %{conn: conn} do
+      # 25 corpus players still on the board at pick 35, derived from
+      # `rookie_picks.json` minus `d13_now.json`'s 34 made picks. The point
+      # is that it exceeds the default limit of 20 — without the default
+      # following the id list, five of these would silently vanish.
+      asked = twenty_five_available_ids()
+      assert length(asked) == 25
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=#{Enum.join(asked, ",")}"
+        )
+
+      body = json_response(conn, 200)
+
+      assert length(body["targets"]) == 25
+      assert MapSet.new(body["targets"], & &1["id"]) == MapSet.new(asked)
+    end
+
+    test "an explicit limit still wins over the id count", %{conn: conn} do
+      asked = twenty_five_available_ids()
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&limit=3&player_ids=#{Enum.join(asked, ",")}"
+        )
+
+      assert length(json_response(conn, 200)["targets"]) == 3
+    end
+
+    test "a blank player_ids is treated as absent, not as 'no players'", %{conn: conn} do
+      # What an empty rank list serialises to. Answering it with zero
+      # targets would be indistinguishable from a corpus with no reads.
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=&limit=60"
+        )
+
+      assert length(json_response(conn, 200)["targets"]) == 16
     end
   end
 
@@ -403,6 +489,29 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       conn = get(conn, ~p"/api/v1/drafts/#{@draft_id}/availability")
       assert json_response(conn, 422)
     end
+
+    # These two were 500s: the params were parsed with
+    # `String.to_integer/1`, which *raises*, and `action_fallback` only
+    # catches `{:error, _}` returns.
+    test "a non-numeric limit is a 422, not a 500", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&limit=abc"
+        )
+
+      assert json_response(conn, 422)["errors"]["detail"] =~ "limit must be an integer"
+    end
+
+    test "a non-numeric at_pick is a 422, not a 500", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&at_pick=39x"
+        )
+
+      assert json_response(conn, 422)["errors"]["detail"] =~ "at_pick must be an integer"
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -481,6 +590,55 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       })
       |> SleeperPlayerApi.Repo.insert!()
     end)
+  end
+
+  # One more fantasy-position corpus player with no FantasyCalc entry at
+  # all (not in fc2.json) — the shape of the production "Kyle Dixon" case
+  # in the report for §3f step 5: before that step he ranked into targets
+  # on a thin ADP sample alone.
+  defp seed_valueless_corpus_player! do
+    Intel.upsert_observed_drafts([%{id: 99_999, teams: 12, status: "complete"}])
+    Intel.upsert_observed_picks(99_999, [%{pick_no: 1, player_id: "90001", picked_by: nil}])
+
+    %SleeperPlayerApi.Sleeper.Player{}
+    |> SleeperPlayerApi.Sleeper.Player.changeset(%{
+      id: 90_001,
+      player_id: "90001",
+      player_json: "{}",
+      active: true,
+      first_name: "No",
+      last_name: "Value",
+      full_name: "No Value",
+      search_first_name: "no",
+      search_last_name: "value",
+      search_full_name: "no value",
+      position_id:
+        (SleeperPlayerApi.Sleeper.get_position_by_abbreviation("WR") ||
+           elem(SleeperPlayerApi.Sleeper.create_position(%{abbreviation: "WR"}), 1)).id
+    })
+    |> Repo.insert!()
+  end
+
+  # Corpus players still on the board at pick 35 — every player id in
+  # `rookie_picks.json` that isn't among `d13_now.json`'s 34 made picks,
+  # most-drafted first, trimmed to 25. Derived rather than hardcoded so it
+  # can't drift from the corpus files; the count matters because it has to
+  # exceed the default limit of 20.
+  defp twenty_five_available_ids do
+    made =
+      read_json!("d13_now.json")
+      |> Enum.map(& &1["player_id"])
+      |> MapSet.new()
+
+    read_json!("rookie_picks.json")
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.map(& &1["player_id"])
+    |> Enum.reject(&MapSet.member?(made, &1))
+    |> Enum.frequencies()
+    |> Enum.sort_by(fn {_id, count} -> -count end)
+    |> Enum.map(fn {id, _count} -> id end)
+    |> Enum.take(25)
   end
 
   defp seed_users_only! do

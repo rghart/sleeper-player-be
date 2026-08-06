@@ -32,6 +32,19 @@ defmodule SleeperPlayerApiWeb.FallbackController do
     |> Phoenix.Controller.json(%{errors: %{detail: "missing required param: #{key}"}})
   end
 
+  # A query param that must be numeric wasn't (`AvailabilityController`'s
+  # `at_pick`/`limit`). Previously these were parsed with
+  # `String.to_integer/1`, which raises rather than returning an error, so
+  # `?limit=abc` came back as a 500.
+  def call(conn, {:error, {:invalid_param, key, value}}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{
+      errors: %{detail: "#{key} must be an integer, got: #{inspect(value)}"}
+    })
+  end
+
   # `SleeperPlayerApi.Intel.PickOwnership` couldn't resolve the draft's own
   # order (not `"linear"`/`"snake"`) — per `Availability`'s moduledoc, this
   # is a hard failure rather than a degraded response, because serving
