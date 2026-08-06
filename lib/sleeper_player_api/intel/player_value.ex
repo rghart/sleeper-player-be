@@ -12,6 +12,12 @@ defmodule SleeperPlayerApi.Intel.PlayerValue do
     field :roster_percent, :float
     field :trade_frequency, :float
     field :as_of, :utc_datetime
+    # Season the player was drafted in (FantasyCalc's `maybeDraftInfo.year`).
+    # `nil` for a veteran or anyone the feed carries no draft info for — see
+    # the migration that added this column. Feeds the rookie-class filter
+    # (plan §3f step 5 / estimator §8), which is "rank within the ROOKIE
+    # CLASS", not the full player pool.
+    field :draft_year, :integer
 
     timestamps()
   end
@@ -27,7 +33,8 @@ defmodule SleeperPlayerApi.Intel.PlayerValue do
       :position_rank,
       :roster_percent,
       :trade_frequency,
-      :as_of
+      :as_of,
+      :draft_year
     ])
     |> validate_required([:player_id, :source])
     |> unique_constraint([:player_id, :source])

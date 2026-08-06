@@ -21,6 +21,7 @@ defmodule SleeperPlayerApiWeb.Router do
     get "/players/active", PlayerController, :active
     get "/players/:id", PlayerController, :show
     get "/drafts/:draft_id/availability", AvailabilityController, :show
+    get "/leagues/:league_id/intel", IntelController, :show
   end
 
   scope "/api/legacy", SleeperPlayerApiWeb do

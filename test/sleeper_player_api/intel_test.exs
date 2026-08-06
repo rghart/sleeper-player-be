@@ -111,6 +111,134 @@ defmodule SleeperPlayerApi.IntelTest do
   end
 
   # ---------------------------------------------------------------------
+  # league_intel/2 (plan §3e / §3f step 5) — hand-built fixture, no corpus
+  # ---------------------------------------------------------------------
+
+  describe "league_intel/2" do
+    setup do
+      Intel.upsert_sleeper_users([
+        %{id: 100, display_name: "alice"},
+        %{id: 200, display_name: "bob"}
+      ])
+
+      seed_player!("P1", "WR")
+      seed_player!("P2", "RB")
+
+      # The home league (555), season 2026 — this is what `league_id`
+      # scopes "who's a manager" to.
+      Intel.upsert_observed_drafts([
+        %{id: 501, league_id: 555, season: "2026", status: "complete", teams: 12, rounds: 1}
+      ])
+
+      Intel.upsert_observed_picks(501, [
+        %{pick_no: 1, player_id: "P1", picked_by: 100},
+        %{pick_no: 2, player_id: "P2", picked_by: 200}
+      ])
+
+      # Alice's other leagues (777, 999-via-bob) — these must count toward
+      # her `leagues_count`/`drafts_count`/`reach_vs_adp` totals (not
+      # scoped to league 555) but must NOT make anyone a "manager of 555".
+      Intel.upsert_observed_drafts([
+        %{id: 502, league_id: 777, season: "2026", status: "complete", teams: 12, rounds: 1},
+        %{id: 503, league_id: 555, season: "2025", status: "complete", teams: 12, rounds: 1},
+        %{id: 504, league_id: 999, season: "2026", status: "complete", teams: 12, rounds: 1}
+      ])
+
+      Intel.upsert_observed_picks(502, [%{pick_no: 3, player_id: "P1", picked_by: 100}])
+      Intel.upsert_observed_picks(503, [%{pick_no: 5, player_id: "P1", picked_by: 100}])
+      Intel.upsert_observed_picks(504, [%{pick_no: 1, player_id: "P1", picked_by: 200}])
+
+      :ok
+    end
+
+    test "managers are scoped to league_id + season; per-manager counts are corpus-wide" do
+      %{managers: managers, corpus: corpus} = Intel.league_intel(555, season: "2026")
+
+      assert Enum.map(managers, & &1.user_id) == [100, 200]
+
+      alice = Enum.find(managers, &(&1.user_id == 100))
+      assert alice.display_name == "alice"
+      # drafts 501 (league 555), 502 (777), 503 (555, season 2025) — 2 distinct leagues.
+      assert alice.leagues_count == 2
+      assert alice.drafts_count == 3
+      assert alice.drafts_complete == 3
+
+      bob = Enum.find(managers, &(&1.user_id == 200))
+      # bob only appears in 501 (555) and 504 (999) — 2 leagues, 2 drafts.
+      assert bob.leagues_count == 2
+      assert bob.drafts_count == 2
+
+      assert corpus.drafts == 4
+      assert corpus.picks == 5
+    end
+
+    test "season filter changes who counts as a manager, without changing their stats" do
+      %{managers: managers_2025} = Intel.league_intel(555, season: "2025")
+      # Only draft 503 (season 2025) belongs to league 555 in that season,
+      # and only alice picked in it.
+      assert Enum.map(managers_2025, & &1.user_id) == [100]
+
+      alice_2025 = hd(managers_2025)
+      # Same corpus-wide totals regardless of which season made her a manager.
+      assert alice_2025.leagues_count == 2
+      assert alice_2025.drafts_count == 3
+    end
+
+    test "omitting season includes every stored season for this league_id" do
+      %{managers: managers} = Intel.league_intel(555, [])
+      assert Enum.map(managers, & &1.user_id) == [100, 200]
+    end
+
+    test "a league_id with nothing crawled yet returns an empty managers list, not an error" do
+      assert %{managers: [], corpus: %{drafts: 4}} = Intel.league_intel(424_242, season: "2026")
+    end
+
+    test "tendencies.crushes: alice's repeated P1 picks across every league she's in" do
+      %{managers: managers} = Intel.league_intel(555, season: "2026")
+      alice = Enum.find(managers, &(&1.user_id == 100))
+
+      assert [%{player_id: "P1", times: 3, of: 3}] = alice.tendencies.crushes
+    end
+
+    test "tendencies.position_lean: 100% of alice's picks are WR" do
+      %{managers: managers} = Intel.league_intel(555, season: "2026")
+      alice = Enum.find(managers, &(&1.user_id == 100))
+
+      assert alice.tendencies.position_lean == [%{position: "WR", picks: 3, share: 1.0}]
+    end
+
+    test "tendencies.reach_vs_adp: league ADP minus the manager's own ADP, n >= 2 only" do
+      %{managers: managers} = Intel.league_intel(555, season: "2026")
+      alice = Enum.find(managers, &(&1.user_id == 100))
+
+      # P1 corpus events: alice at norm 1.0 (501), 3.0 (502), 5.0 (503);
+      # bob at norm 1.0 (504). League ADP = (1+3+5+1)/4 = 2.5.
+      # Alice's own ADP for P1 = (1+3+5)/3 = 3.0.
+      # reach_vs_adp = 2.5 - 3.0 = -0.5 (she drafts P1 later than the
+      # corpus average — the sign convention this step chose: positive
+      # means "reaches earlier than average", negative means "lets him
+      # slide").
+      assert_in_delta alice.tendencies.reach_vs_adp, -0.5, 0.001
+    end
+
+    test "tendencies.reach_vs_adp is nil when no picked player clears the n >= 2 corpus threshold" do
+      Intel.upsert_sleeper_users([%{id: 300, display_name: "carol"}])
+      seed_player!("P3", "TE")
+
+      Intel.upsert_observed_drafts([
+        %{id: 505, league_id: 555, season: "2026", status: "complete", teams: 12, rounds: 1}
+      ])
+
+      Intel.upsert_observed_picks(505, [%{pick_no: 1, player_id: "P3", picked_by: 300}])
+
+      %{managers: managers} = Intel.league_intel(555, season: "2026")
+      carol = Enum.find(managers, &(&1.user_id == 300))
+
+      assert carol.tendencies.reach_vs_adp == nil
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # Corpus round-trip — the point of this step
   # ---------------------------------------------------------------------
 
@@ -222,6 +350,33 @@ defmodule SleeperPlayerApi.IntelTest do
   defp sample_player_ids do
     # Names for these ids are in docs/leaguemate-intel.md §4a/§4e-bis.
     ["13306", "13319", "13353", "13347", "13434", "13287"]
+  end
+
+  defp seed_player!(player_id, position_abbr) do
+    position =
+      SleeperPlayerApi.Sleeper.get_position_by_abbreviation(position_abbr) ||
+        (
+          {:ok, position} =
+            SleeperPlayerApi.Sleeper.create_position(%{abbreviation: position_abbr})
+
+          position
+        )
+
+    %SleeperPlayerApi.Sleeper.Player{}
+    |> SleeperPlayerApi.Sleeper.Player.changeset(%{
+      id: String.to_integer(player_id |> String.replace_prefix("P", "9")),
+      player_id: player_id,
+      player_json: "{}",
+      active: true,
+      first_name: player_id,
+      last_name: position_abbr,
+      full_name: "#{player_id} #{position_abbr}",
+      search_first_name: String.downcase(player_id),
+      search_last_name: String.downcase(position_abbr),
+      search_full_name: String.downcase("#{player_id} #{position_abbr}"),
+      position_id: position.id
+    })
+    |> Repo.insert!()
   end
 
   defp seed_corpus_from_json! do
