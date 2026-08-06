@@ -1,9 +1,9 @@
 defmodule SleeperPlayerApi.Intel do
   @moduledoc """
   Context for the leaguemate-intel corpus: storing the Sleeper drafts/picks
-  harvested by the (not-yet-built, see `docs/leaguemate-intel.md` §3f steps
-  2-3) crawler, and shaping what's stored back out into the plain-map input
-  `SleeperPlayerApi.Intel.Estimator` expects.
+  harvested by `SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts` (see
+  `docs/leaguemate-intel.md` §3f steps 2-3), and shaping what's stored back
+  out into the plain-map input `SleeperPlayerApi.Intel.Estimator` expects.
 
   Two halves, per the plan's §3e "where the math runs":
 
@@ -27,6 +27,8 @@ defmodule SleeperPlayerApi.Intel do
   """
 
   import Ecto.Query, warn: false
+
+  require Logger
 
   alias SleeperPlayerApi.Repo
   alias SleeperPlayerApi.Client.Sleeper
@@ -95,19 +97,43 @@ defmodule SleeperPlayerApi.Intel do
 
   Keyed on `(draft_id, pick_no)`, so re-crawling an in-progress draft (the
   `status == "drafting"` refresh case from plan §3c) safely overwrites.
+
+  Also upserts `draft_participants` for this draft — every distinct non-nil
+  `picked_by` among the picks just stored (plan §3a's rationale for the
+  table: "avoids re-deriving participation from `observed_picks` every
+  query"). This is deliberately done *here*, as a side effect of storing
+  picks, rather than as a separate call `CrawlLeaguemateDrafts` has to
+  remember to make: every caller that stores picks (the crawl itself,
+  `refresh_draft/1`, and any test that seeds through this function rather
+  than a DB-seeding shortcut) gets participants for free and can never drift
+  from what `observed_picks` says, which is exactly the bug class flagged in
+  the report on this step. `upsert_draft_participants/2` is itself
+  conflict-safe, so re-storing the same picks (a `"drafting"` refresh) is a
+  no-op here too.
   """
   @spec upsert_observed_picks(integer, [map]) :: {non_neg_integer, nil}
   def upsert_observed_picks(draft_id, picks) do
-    picks
-    |> Enum.map(&Map.put(&1, :draft_id, draft_id))
-    |> then(
-      &insert_all_batched(
+    stamped = Enum.map(picks, &Map.put(&1, :draft_id, draft_id))
+
+    result =
+      insert_all_batched(
         ObservedPick,
-        &1,
+        stamped,
         conflict_target: [:draft_id, :pick_no],
         replace: [:round, :draft_slot, :roster_id, :player_id, :picked_by]
       )
-    )
+
+    participant_ids =
+      stamped
+      |> Enum.map(& &1[:picked_by])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    unless participant_ids == [] do
+      upsert_draft_participants(draft_id, participant_ids)
+    end
+
+    result
   end
 
   @doc """
@@ -149,6 +175,38 @@ defmodule SleeperPlayerApi.Intel do
         on_conflict: :nothing
       )
     )
+  end
+
+  @doc """
+  Backfills `draft_participants` from every `draft_id`/non-nil-`picked_by`
+  pair already sitting in `observed_picks` — the one-time catch-up for
+  production, where `observed_picks` has ~3,400 rows and
+  `draft_participants` has zero, because nothing called
+  `upsert_draft_participants/2` before `upsert_observed_picks/2` started
+  doing it as a side effect (see that function's doc, and the report on this
+  step). Called from the `20260806140100_backfill_draft_participants.exs`
+  migration's `up/0`.
+
+  Idempotent — safe to run twice. Every row it writes goes through
+  `upsert_draft_participants/2`, which is itself `on_conflict: :nothing` on
+  `(draft_id, user_id)`, so a second run touches nothing and inserts no
+  duplicates.
+  """
+  @spec backfill_draft_participants() :: {non_neg_integer, nil}
+  def backfill_draft_participants do
+    from(p in ObservedPick,
+      where: not is_nil(p.picked_by),
+      distinct: true,
+      select: {p.draft_id, p.picked_by}
+    )
+    |> Repo.all()
+    |> Enum.group_by(fn {draft_id, _user_id} -> draft_id end, fn {_draft_id, user_id} ->
+      user_id
+    end)
+    |> Enum.reduce({0, nil}, fn {draft_id, user_ids}, {count, _} ->
+      {n, _} = upsert_draft_participants(draft_id, user_ids)
+      {count + n, nil}
+    end)
   end
 
   @doc """
@@ -397,17 +455,25 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
-  `%{picked_by => count of distinct drafts}` across every stored pick —
-  "how many drafts have we observed this manager in at all", the `seen_m`
-  input to the estimator's manager multiplier (§6). Managers with `nil`
-  `picked_by` (not a tracked leaguemate) are excluded.
+  `%{user_id => count of distinct drafts}` — "how many drafts have we
+  observed this manager in at all", the `seen_m` input to the estimator's
+  manager multiplier (§6).
+
+  Reads `draft_participants` rather than `GROUP BY`-ing `observed_picks`
+  directly — the exact point of that table per plan §3a ("avoids re-deriving
+  participation from `observed_picks` every query"). `Intel.upsert_observed_picks/2`
+  keeps it populated as a side effect of storing picks, so this is
+  equivalent to the old direct-from-`observed_picks` query, just without
+  re-scanning every pick row on every call. `user_id` here is *any* Sleeper
+  user id observed picking, tracked leaguemate or not — same scope the old
+  query had (`not is_nil(picked_by)`, no filter on `sleeper_users`
+  membership).
   """
   @spec manager_drafts_seen() :: %{integer => non_neg_integer}
   def manager_drafts_seen do
-    from(p in ObservedPick,
-      where: not is_nil(p.picked_by),
-      group_by: p.picked_by,
-      select: {p.picked_by, count(p.draft_id, :distinct)}
+    from(dp in DraftParticipant,
+      group_by: dp.user_id,
+      select: {dp.user_id, count(dp.draft_id, :distinct)}
     )
     |> Repo.all()
     |> Map.new()
@@ -811,23 +877,48 @@ defmodule SleeperPlayerApi.Intel do
 
       %{managers: [%{user_id, display_name, leagues_count, drafts_count,
                       drafts_complete, tendencies}],
-        corpus: %{drafts, picks, last_crawled_at}}
+        corpus: %{drafts, picks, last_crawled_at, membership_source}}
 
   ## Who counts as a "manager" of this league?
 
-  Every leaguemate who has actually made a pick in one of *this* league's
-  own stored drafts — `observed_drafts.league_id == league_id`, optionally
-  narrowed further to `opts[:season]`. Derived straight from `observed_picks`
-  (a `GROUP BY`-shaped query), **not** the `draft_participants` join table
-  plan §3a describes: that table exists in the schema (`upsert_draft_participants/2`)
-  but nothing populates it yet — `CrawlLeaguemateDrafts` never calls it (see
-  the report on this step). Wiring that up is a `CrawlLeaguemateDrafts`
-  change, out of this step's scope; deriving participation from picks
-  instead is the same approach `drafts_corpus/2` already takes and needs no
-  schema change to ship.
+  Every member of the *live* Sleeper league, via `GET /league/:id/users` —
+  the same call `CrawlLeaguemateDrafts` already makes, and the same
+  request-scoped live-fetch pattern `fetch_roster_owners/1` uses for
+  `/availability`. This is deliberately **not** derived from
+  `observed_picks` or `draft_participants`: both only know about managers
+  who have actually picked in an *observed* draft, so a leaguemate sitting
+  out this year's rookie draft (0 drafts seen) would silently vanish from
+  the list entirely — exactly backwards from what the frontend needs. Plan
+  §3 Frontend is explicit that a 0-draft manager must still render, as
+  "league average · none of their drafts seen", not disappear. See the
+  report on this step for the two production leaguemates this fixes.
 
-  If this league's own draft(s) haven't been crawled yet, `managers` comes
-  back `[]` — an honest "nothing crawled for this league", not an error.
+  `draft_participants` (now populated, see `Intel.upsert_observed_picks/2`)
+  does NOT fix this on its own — it records draft *participation*, and a
+  leaguemate who has never drafted appears in no participation table
+  either. League *membership* is a different fact than participation, and
+  `GET /league/:id/users` is its only authoritative source.
+
+  A member's `display_name` comes from the live response itself (falling
+  back to the stored `sleeper_users` row if Sleeper ever returns one with a
+  blank name); nothing here writes back to `sleeper_users` — that table's
+  writer stays `CrawlLeaguemateDrafts.store_users/1`, keeping "who crawls
+  writes it" a single rule.
+
+  **Failure behaviour.** If the live call fails (Sleeper down, bad
+  `league_id`, rate limited), this falls back to the old derived set —
+  every user_id with at least one observed pick in one of this league's own
+  stored drafts, via `manager_ids_for_league/2` — rather than failing the
+  whole request: `/intel` is a browse view, not a survival number, so a
+  degraded-but-present response is more useful than a 5xx. That degradation
+  is never silent, though: it's logged, and `corpus.membership_source` in
+  the response is `"live"` or `"derived"` so a caller (or a future UI badge)
+  can tell a complete membership list from a possibly-incomplete one rather
+  than the response looking equally authoritative either way.
+
+  If neither the live call nor any stored draft exists for this league,
+  `managers` comes back `[]` — an honest "nothing known about this league",
+  not an error.
 
   ## `leagues_count` / `drafts_count` / `drafts_complete`
 
@@ -866,18 +957,18 @@ defmodule SleeperPlayerApi.Intel do
   def league_intel(league_id, opts \\ []) do
     league_id = to_int(league_id)
     season = opts[:season]
-
     names = manager_names_by_id()
 
+    {member_pairs, membership_source} = league_membership(league_id, season, names)
+
     managers =
-      league_id
-      |> manager_ids_for_league(season)
-      |> Enum.map(fn user_id ->
+      member_pairs
+      |> Enum.map(fn {user_id, display_name} ->
         stats = manager_corpus_stats(user_id)
 
         %{
           user_id: user_id,
-          display_name: Map.get(names, user_id),
+          display_name: display_name,
           leagues_count: stats.leagues_count,
           drafts_count: stats.drafts_count,
           drafts_complete: stats.drafts_complete,
@@ -886,30 +977,96 @@ defmodule SleeperPlayerApi.Intel do
       end)
       |> Enum.sort_by(&(&1.display_name || ""))
 
-    %{managers: managers, corpus: corpus_summary()}
+    %{
+      managers: managers,
+      corpus: Map.put(corpus_summary(), :membership_source, membership_source)
+    }
   end
 
+  # `{[{user_id, display_name}], :live | :derived}` — see `league_intel/2`'s
+  # "Failure behaviour" doc for why the fallback exists and why it's not
+  # silent.
+  defp league_membership(league_id, season, names) do
+    case fetch_league_members(league_id) do
+      {:ok, members} ->
+        pairs =
+          Enum.map(members, fn m -> {m.user_id, m.display_name || Map.get(names, m.user_id)} end)
+
+        {pairs, :live}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Intel.league_intel: live GET /league/#{league_id}/users failed (#{inspect(reason)}); " <>
+            "falling back to observed_picks-derived membership"
+        )
+
+        pairs =
+          league_id
+          |> manager_ids_for_league(season)
+          |> Enum.map(fn user_id -> {user_id, Map.get(names, user_id)} end)
+
+        {pairs, :derived}
+    end
+  end
+
+  @doc """
+  Live league membership via `GET /league/:id/users` — the authoritative
+  source for "who is in this league" (see `league_intel/2`'s moduledoc
+  section on why `observed_picks`/`draft_participants` can't answer this).
+  Deliberately not persisted anywhere here; see that same doc.
+  """
+  @spec fetch_league_members(integer | String.t()) ::
+          {:ok, [%{user_id: integer, display_name: String.t() | nil}]} | {:error, term}
+  def fetch_league_members(league_id) do
+    case Sleeper.get("/league/#{league_id}/users") do
+      {:ok, users} ->
+        members =
+          Enum.map(users, fn u ->
+            %{user_id: to_int(u["user_id"]), display_name: u["display_name"]}
+          end)
+
+        {:ok, members}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # The pre-Gap-2 derivation, kept only as the fallback `league_membership/3`
+  # reaches for when the live call fails: every user_id with at least one
+  # observed pick in one of this league's own stored drafts, optionally
+  # narrowed to `season`. This is participation, not membership — it will
+  # never surface a 0-draft manager, which is the exact gap the live call
+  # exists to close. Reads `draft_participants` rather than `GROUP BY`-ing
+  # `observed_picks` directly, same reasoning as `manager_drafts_seen/0`.
   defp manager_ids_for_league(league_id, season) do
     base =
-      from(p in ObservedPick,
+      from(dp in DraftParticipant,
         join: d in ObservedDraft,
-        on: d.id == p.draft_id,
-        where: d.league_id == ^league_id and not is_nil(p.picked_by)
+        on: d.id == dp.draft_id,
+        where: d.league_id == ^league_id
       )
 
-    query = if season, do: from([p, d] in base, where: d.season == ^season), else: base
+    query = if season, do: from([dp, d] in base, where: d.season == ^season), else: base
 
     query
     |> distinct(true)
-    |> select([p, _d], p.picked_by)
+    |> select([dp, _d], dp.user_id)
     |> Repo.all()
   end
 
+  # Corpus-wide totals for one manager — NOT scoped to any one league (see
+  # `league_intel/2`'s doc on `leagues_count`/`drafts_count`/`drafts_complete`).
+  # Reads `draft_participants` rather than `GROUP BY`-ing `observed_picks`
+  # directly, per plan §3a's rationale for the table; a user_id with no
+  # participation rows at all (a live-membership manager with 0 observed
+  # drafts, Gap 2's whole point) correctly comes back all zeros rather than
+  # `nil`, since `count(...)` over an empty match set is `0` in Postgres.
   defp manager_corpus_stats(user_id) do
-    from(p in ObservedPick,
+    from(dp in DraftParticipant,
       join: d in ObservedDraft,
-      on: d.id == p.draft_id,
-      where: p.picked_by == ^user_id,
+      on: d.id == dp.draft_id,
+      where: dp.user_id == ^user_id,
       select: %{
         leagues_count: count(d.league_id, :distinct),
         drafts_count: count(d.id, :distinct),
