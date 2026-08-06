@@ -296,6 +296,75 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDraftsTest do
     end
   end
 
+  describe "crawl_configured_leagues/0 — the scheduled entry point" do
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:sleeper_player_api, :intel_leagues)
+        Application.delete_env(:sleeper_player_api, :intel_season)
+      end)
+
+      :ok
+    end
+
+    test "does nothing, quietly, when no leagues are configured" do
+      Application.put_env(:sleeper_player_api, :intel_leagues, [])
+      assert CrawlLeaguemateDrafts.crawl_configured_leagues() == []
+    end
+
+    test "defaults the season to the current calendar year", %{bypass: bypass} do
+      year = Date.utc_today().year |> Integer.to_string()
+      Application.put_env(:sleeper_player_api, :intel_leagues, [555])
+
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"}
+      ])
+
+      # If the season were wrong this path would never be requested and
+      # Bypass would fail the test on an unrequested expectation.
+      expect_json(bypass, "/user/100/drafts/nfl/#{year}", [])
+
+      assert [{555, {:ok, _summary}}] = CrawlLeaguemateDrafts.crawl_configured_leagues()
+    end
+
+    test "an explicit :intel_season overrides the default", %{bypass: bypass} do
+      Application.put_env(:sleeper_player_api, :intel_leagues, [555])
+      Application.put_env(:sleeper_player_api, :intel_season, "2019")
+
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"}
+      ])
+
+      expect_json(bypass, "/user/100/drafts/nfl/2019", [])
+
+      assert [{555, {:ok, _}}] = CrawlLeaguemateDrafts.crawl_configured_leagues()
+    end
+
+    test "one league failing doesn't stop the others", %{bypass: bypass} do
+      Application.put_env(:sleeper_player_api, :intel_leagues, [555, 666])
+      Application.put_env(:sleeper_player_api, :intel_season, "2026")
+
+      # 555 can't even be enumerated.
+      Bypass.expect(bypass, "GET", "/league/555/users", fn conn ->
+        Plug.Conn.resp(conn, 500, ~s({"error":"boom"}))
+      end)
+
+      expect_json(bypass, "/league/666/users", [
+        %{"user_id" => "200", "display_name" => "bob", "avatar" => "av2"}
+      ])
+
+      expect_json(bypass, "/user/200/drafts/nfl/2026", [draft("1001", "complete")])
+      expect_json(bypass, "/draft/1001/picks", [pick(1, "P1", "200")])
+
+      results = CrawlLeaguemateDrafts.crawl_configured_leagues()
+
+      assert [{555, {:error, _}}, {666, {:ok, summary}}] = results
+      assert summary.picks_stored == 1
+
+      # The healthy league's data really landed, despite the first one dying.
+      assert %ObservedDraft{} = Repo.get(ObservedDraft, 1001)
+    end
+  end
+
   describe "picks Sleeper can't attribute to a user" do
     # Regression: a live production crawl died on the first draft it hit.
     # Real Sleeper data uses `picked_by: ""` (not null) for an autopicked or

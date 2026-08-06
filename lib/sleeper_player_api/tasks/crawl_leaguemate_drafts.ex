@@ -31,9 +31,10 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts do
   here becomes a throttled wait on the *next* call rather than a hot retry
   loop on this one.
 
-  No Quantum wiring, no controllers — this task is meant to be invoked
-  directly (`CrawlLeaguemateDrafts.crawl(league_id, season)`) until later
-  plan steps wire it up.
+  Scheduled nightly at 4am Central via `crawl_configured_leagues/0` (see the
+  Quantum jobs in `config/config.exs`), which sweeps every league in
+  `config :sleeper_player_api, :intel_leagues`. `crawl/2` remains the
+  direct entry point for a one-off crawl of a specific league.
   """
 
   require Logger
@@ -66,6 +67,66 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts do
               picks_stored: 0,
               traded_picks_stored: 0,
               errors: []
+  end
+
+  @doc """
+  The scheduled entry point (see the Quantum job in `config/config.exs`).
+
+  Crawls every league in `config :sleeper_player_api, :intel_leagues` for
+  `:intel_season`, defaulting to the current calendar year — Sleeper labels
+  a season by the year its regular season starts, and rookie drafts happen
+  mid-year, so the calendar year is the right label for the whole window
+  this feature is used in.
+
+  Never raises and never propagates a failure: one league erroring must not
+  stop the others, and a scheduled job that crashes takes its Quantum
+  worker down with it. Every outcome is logged. Returns the list of
+  `{league_id, result}` pairs so a manual caller can still inspect them.
+
+  With no leagues configured this logs once and does nothing, which is the
+  correct behaviour for an install that hasn't been pointed at a league yet
+  rather than an error worth waking up to.
+  """
+  @spec crawl_configured_leagues() :: [{term, {:ok, Summary.t()} | {:error, term}}]
+  def crawl_configured_leagues do
+    leagues = Application.get_env(:sleeper_player_api, :intel_leagues, [])
+    season = configured_season()
+
+    if leagues == [] do
+      Logger.info("CrawlLeaguemateDrafts: no :intel_leagues configured, nothing to crawl")
+      []
+    else
+      Enum.map(leagues, fn league_id ->
+        result =
+          try do
+            crawl(league_id, season)
+          rescue
+            e ->
+              Logger.error(
+                "CrawlLeaguemateDrafts: league #{league_id} raised: #{Exception.message(e)}"
+              )
+
+              {:error, {:raised, Exception.message(e)}}
+          end
+
+        case result do
+          {:ok, _summary} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.error("CrawlLeaguemateDrafts: league #{league_id}: #{inspect(reason)}")
+        end
+
+        {league_id, result}
+      end)
+    end
+  end
+
+  defp configured_season do
+    case Application.get_env(:sleeper_player_api, :intel_season) do
+      nil -> Date.utc_today().year |> Integer.to_string()
+      season -> to_string(season)
+    end
   end
 
   @doc """

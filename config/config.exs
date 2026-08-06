@@ -43,11 +43,45 @@ config :phoenix, :json_library, Jason
 # SleeperPlayerApi.RateLimiter for why.
 config :sleeper_player_api, SleeperPlayerApi.RateLimiter, calls_per_minute: 300
 
-# Quantum cron jobs
+# Leagues the leaguemate-intel crawler sweeps nightly (plan §3c). Not a
+# secret — Sleeper league ids are public, and this one is already in the
+# frontend's `src/urls.js`. One league today; making this per-user is the
+# larger "configurable Sleeper user" change, not this one.
+config :sleeper_player_api, :intel_leagues, [1_313_425_233_297_813_504]
+
+# Season to crawl. Unset on purpose: the crawler falls back to the current
+# calendar year, which is how Sleeper labels a season, so this rolls over
+# without a deploy. Set it to pin a specific season.
+# config :sleeper_player_api, :intel_season, "2026"
+
+# Quantum cron jobs. Times are UTC; Central is UTC-5.
+#
+# Ordering matters: the player dump runs first because the intel crawler
+# joins to `players` for name/position, and values land before the crawl so
+# a fresh corpus is ranked against fresh market data. All three are well
+# under a minute in practice (a warm crawl is ~22 API calls), but
+# `overlap: false` means a pathological run can't stack on itself.
 config :sleeper_player_api, SleeperPlayerApi.Scheduler,
   jobs: [
-    # Runs daily at 3am Central time:
-    {"0 8 * * *", {SleeperPlayerApi.Tasks.GetSleeperPlayerData, :get_sleeper_player_data, []}}
+    # 3:00am Central — the nightly Sleeper player dump.
+    {"0 8 * * *", {SleeperPlayerApi.Tasks.GetSleeperPlayerData, :get_sleeper_player_data, []}},
+
+    # 3:30am Central — refresh market values from FantasyCalc.
+    [
+      name: :refresh_player_values,
+      schedule: "30 8 * * *",
+      task: {SleeperPlayerApi.Tasks.RefreshPlayerValues, :refresh_player_values, []},
+      overlap: false
+    ],
+
+    # 4:00am Central — sweep leaguemate drafts. Completed drafts are
+    # immutable and never refetched, so a warm run is cheap.
+    [
+      name: :crawl_leaguemate_drafts,
+      schedule: "0 9 * * *",
+      task: {SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts, :crawl_configured_leagues, []},
+      overlap: false
+    ]
   ]
 
 # Import environment specific config. This must remain at the bottom
