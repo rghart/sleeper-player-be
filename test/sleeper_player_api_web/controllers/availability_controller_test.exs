@@ -146,6 +146,125 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
     end
   end
 
+  describe "GET /api/v1/drafts/:draft_id/availability — market values from FantasyCalc (§3f step 5)" do
+    @describetag :corpus
+
+    # This block is the "tests that bypass the crawler" regression guard for
+    # the value layer: `player_values` rows come from actually running
+    # `RefreshPlayerValues` against Bypass (the real fetch/shape/upsert
+    # path), not from a seeding helper poking rows straight into Postgres.
+    # A second, independent Bypass instance stands in for FantasyCalc —
+    # separate Application env key (`:fantasy_calc_base_url`) from the
+    # Sleeper one, so both can be stubbed in the same test.
+    setup %{bypass: bypass} do
+      seed_corpus_from_json!()
+      seed_target_players!()
+      stub_district_13(bypass)
+
+      fc_bypass = Bypass.open()
+
+      Application.put_env(
+        :sleeper_player_api,
+        :fantasy_calc_base_url,
+        "http://localhost:#{fc_bypass.port}"
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:sleeper_player_api, :fantasy_calc_base_url)
+      end)
+
+      Bypass.expect_once(fc_bypass, "GET", "/values/current", fn conn ->
+        Plug.Conn.resp(conn, 200, File.read!(Path.join(@corpus_dir, "fc2.json")))
+      end)
+
+      assert {:ok, _count} = SleeperPlayerApi.Tasks.RefreshPlayerValues.refresh_player_values()
+
+      :ok
+    end
+
+    test "marketPick/adpGap reproduce all 16 fixture values exactly", %{conn: conn} do
+      fixture = read_json!("fixture.json")
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&limit=60"
+        )
+
+      body = json_response(conn, 200)
+      targets_by_id = Map.new(body["targets"], &{&1["id"], &1})
+
+      for expected <- fixture["targets"] do
+        actual = Map.fetch!(targets_by_id, expected["id"])
+
+        assert actual["marketPick"] == expected["marketPick"],
+               "marketPick mismatch for #{expected["name"]}"
+
+        assert actual["adpGap"] == expected["adpGap"],
+               "adpGap mismatch for #{expected["name"]}"
+      end
+    end
+
+    test "Joly/Trigg/Taylor (no maybeDraftInfo) still target with marketPick nil", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&limit=60"
+        )
+
+      body = json_response(conn, 200)
+      target_ids = MapSet.new(body["targets"], & &1["id"])
+
+      for id <- ["13400", "13401", "13348"] do
+        assert MapSet.member?(target_ids, id), "expected #{id} to still be a target"
+      end
+
+      by_id = Map.new(body["targets"], &{&1["id"], &1})
+      assert by_id["13400"]["marketPick"] == nil
+      assert by_id["13400"]["name"] == "Justin Joly"
+    end
+
+    test "a candidate absent from FantasyCalc entirely is excluded from targets", %{conn: conn} do
+      # Seed one more fantasy-position corpus player who has no FantasyCalc
+      # entry at all (not in fc2.json) — before this step it would have
+      # ranked into targets on raw ADP alone, same shape as the production
+      # "Kyle Dixon" case in the report for this step.
+      Intel.upsert_observed_drafts([%{id: 99_999, teams: 12, status: "complete"}])
+
+      Intel.upsert_observed_picks(99_999, [
+        %{pick_no: 1, player_id: "90001", picked_by: nil}
+      ])
+
+      %SleeperPlayerApi.Sleeper.Player{}
+      |> SleeperPlayerApi.Sleeper.Player.changeset(%{
+        id: 90_001,
+        player_id: "90001",
+        player_json: "{}",
+        active: true,
+        first_name: "No",
+        last_name: "Value",
+        full_name: "No Value",
+        search_first_name: "no",
+        search_last_name: "value",
+        search_full_name: "no value",
+        position_id:
+          (SleeperPlayerApi.Sleeper.get_position_by_abbreviation("WR") ||
+             elem(SleeperPlayerApi.Sleeper.create_position(%{abbreviation: "WR"}), 1)).id
+      })
+      |> Repo.insert!()
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&limit=60"
+        )
+
+      body = json_response(conn, 200)
+      target_ids = MapSet.new(body["targets"], & &1["id"])
+      refute MapSet.member?(target_ids, "90001")
+    end
+  end
+
   describe "GET /api/v1/drafts/:draft_id/availability — no crawled corpus at all" do
     # Reads `lmusers.json` (below) to seed leaguemate names, so it needs the
     # same `:corpus` gate as the acceptance-case block above.

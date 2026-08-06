@@ -162,7 +162,15 @@ defmodule SleeperPlayerApi.Intel do
       PlayerValue,
       values,
       conflict_target: [:player_id, :source],
-      replace: [:value, :overall_rank, :position_rank, :roster_percent, :trade_frequency, :as_of]
+      replace: [
+        :value,
+        :overall_rank,
+        :position_rank,
+        :roster_percent,
+        :trade_frequency,
+        :as_of,
+        :draft_year
+      ]
     )
   end
 
@@ -706,27 +714,343 @@ defmodule SleeperPlayerApi.Intel do
         limit: limit,
         corpus: corpus,
         candidate_lookup: player_lookup(candidate_ids),
-        market_rank: Estimator.rookie_class_rank(market_rookie_class_entries()),
+        market_rank: Estimator.rookie_class_rank(market_rookie_class_entries(draft.season)),
         raw_picks: manager_pick_strings(candidate_ids, user_id_to_manager),
-        eligible_ids: fantasy_position_ids(candidate_ids)
+        eligible_ids: eligible_ids(candidate_ids)
       })
     end
   end
 
-  # `player_values` (plan §2/§3a) is refreshed from FantasyCalc by plan §3f
-  # step 5, which this endpoint step deliberately doesn't build (scope
-  # note: "NOT /intel — that's step 5"). Until that refresh job runs, this
-  # is always empty, so `marketPick`/`adpGap` come back `nil` for every
-  # target — an honest "no market read yet", not a fabricated one.
-  # `maybeDraftInfo.year` (the rookie-class filter, estimator §8) isn't a
-  # `player_values` column either; extending that schema is step 5's job.
-  defp market_rookie_class_entries do
-    from(pv in PlayerValue,
-      where: pv.source == "fantasycalc",
-      select: {pv.player_id, pv.value}
+  # `player_values` (plan §2/§3a) is populated by
+  # `SleeperPlayerApi.Tasks.RefreshPlayerValues` (plan §3f step 5) — not
+  # this module. Filters to the rookie class for `draft.season`: entries
+  # whose `draft_year` matches, per estimator §8 ("rank within the ROOKIE
+  # CLASS... not overall rank"). `draft.season` is a string ("2026", as
+  # Sleeper sends it); `draft_year` is stored as an integer (from
+  # FantasyCalc's `maybeDraftInfo.year`), so the comparison converts.
+  #
+  # Until `RefreshPlayerValues` has run — or for a season it hasn't covered
+  # — this returns `[]`, which flows through to `Estimator.rookie_class_rank/1`
+  # returning `%{}`, so `marketPick`/`adpGap` come back `nil` for every
+  # target: an honest "no market read yet", not a fabricated one.
+  #
+  # NOT the same set `eligible_ids/1` below restricts targets to — see its
+  # comment. Three of the fixture's own 16 targets (Justin Joly, Michael
+  # Trigg, J'Mari Taylor) are in FantasyCalc's payload with no
+  # `maybeDraftInfo` at all, so they're absent here (no `marketPick`) but
+  # must still be eligible targets.
+  defp market_rookie_class_entries(nil), do: []
+
+  defp market_rookie_class_entries(season) do
+    case Integer.parse(season) do
+      {year, _} ->
+        from(pv in PlayerValue,
+          where: pv.source == "fantasycalc" and pv.draft_year == ^year,
+          select: {pv.player_id, pv.value}
+        )
+        |> Repo.all()
+        |> Enum.map(fn {player_id, value} -> {to_string(player_id), value} end)
+
+      :error ->
+        []
+    end
+  end
+
+  # Every player id FantasyCalc tracks at all — source `"fantasycalc"`,
+  # regardless of `draft_year`. Deliberately broader than
+  # `market_rookie_class_entries/1`: "FantasyCalc's tracked rookie universe"
+  # (plan §3f step 5 item 5) means "FantasyCalc has *an opinion* on this
+  # player", not "FantasyCalc classifies him as this season's rookie class"
+  # — verified against the fixture, whose Joly/Trigg/Taylor entries have no
+  # `maybeDraftInfo` (so no `marketPick`) but are still present in
+  # FantasyCalc's payload and still targets.
+  defp market_universe_ids do
+    from(pv in PlayerValue, where: pv.source == "fantasycalc", select: pv.player_id)
+    |> Repo.all()
+    |> Enum.map(&to_string/1)
+    |> MapSet.new()
+  end
+
+  # Which corpus players are eligible to become `targets` (plan §3f step 5
+  # item 5 — "complete the deferred targets restriction"). Two filters,
+  # applied together once market data exists:
+  #
+  #   1. fantasy-relevant position (already built in step 4 — a rookie
+  #      draft's pool isn't exclusively QB/RB/WR/TE)
+  #   2. present in FantasyCalc's tracked universe at all (new here) — a
+  #      player with no market value shouldn't be a target. This is what
+  #      fixes the production case in the report: a one-draft, one-manager
+  #      sample ("Kyle Dixon, WR, lgADP 34.0, sd 0.0, n 1") was outranking
+  #      real targets purely on a thin ADP sample with nothing else backing
+  #      it up.
+  #
+  # Degradation is deliberate: if `market_universe_ids/0` is empty (no
+  # refresh has run yet), filter 2 is skipped entirely rather than
+  # intersecting against an empty set — which would zero out `targets`
+  # completely. That keeps `/availability` working exactly as it did before
+  # this step for anyone who hasn't run `RefreshPlayerValues` yet, which is
+  # also why the existing acceptance tests (no `player_values` seeded) pass
+  # unchanged.
+  defp eligible_ids(candidate_ids) do
+    position_ids = fantasy_position_ids(candidate_ids)
+    market_ids = market_universe_ids()
+
+    if MapSet.size(market_ids) == 0 do
+      position_ids
+    else
+      MapSet.intersection(position_ids, market_ids)
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # `/intel` (plan §3e, §3f step 5)
+  # ---------------------------------------------------------------------
+
+  @doc """
+  Builds the `GET /api/v1/leagues/:league_id/intel` response (plan §3e):
+
+      %{managers: [%{user_id, display_name, leagues_count, drafts_count,
+                      drafts_complete, tendencies}],
+        corpus: %{drafts, picks, last_crawled_at}}
+
+  ## Who counts as a "manager" of this league?
+
+  Every leaguemate who has actually made a pick in one of *this* league's
+  own stored drafts — `observed_drafts.league_id == league_id`, optionally
+  narrowed further to `opts[:season]`. Derived straight from `observed_picks`
+  (a `GROUP BY`-shaped query), **not** the `draft_participants` join table
+  plan §3a describes: that table exists in the schema (`upsert_draft_participants/2`)
+  but nothing populates it yet — `CrawlLeaguemateDrafts` never calls it (see
+  the report on this step). Wiring that up is a `CrawlLeaguemateDrafts`
+  change, out of this step's scope; deriving participation from picks
+  instead is the same approach `drafts_corpus/2` already takes and needs no
+  schema change to ship.
+
+  If this league's own draft(s) haven't been crawled yet, `managers` comes
+  back `[]` — an honest "nothing crawled for this league", not an error.
+
+  ## `leagues_count` / `drafts_count` / `drafts_complete`
+
+  These are **not** scoped to `league_id` — they're the manager's totals
+  across the *entire* stored corpus (every league/draft they've ever been
+  observed in), matching plan §5's "how many leagues / rookie drafts is he
+  in? — free, it's just a count over the data already harvested." Scoping
+  them to one league would make every manager read "1 league, 1 draft",
+  which isn't the question this field answers.
+
+  ## `tendencies`
+
+  Loosely specified by plan §4c (player crushes) and §0 (positional lean,
+  reach vs ADP) — implemented here as exactly what falls out of
+  `observed_picks` as `GROUP BY` aggregates, no fitted model:
+
+    * `crushes` — this manager's top 5 most-repeated players, by raw pick
+      count, across every complete draft they're observed in (plan §4c).
+    * `position_lean` — the share of their picks at each position
+      (QB/RB/WR/TE — the same `players`-table join `fantasy_position_ids/1`
+      uses), sorted by share descending.
+    * `reach_vs_adp` — mean `(league ADP − their own ADP)` across every
+      player they've drafted at least once, restricted to players the wider
+      corpus has seen at least twice (`n >= 2`) so a single other manager's
+      one-off pick can't define "league ADP" for the comparison. Positive
+      means this manager takes players earlier than the corpus average
+      (a reacher); negative means they let players slide. `nil` if nothing
+      clears the `n >= 2` bar.
+
+  Deliberately NOT built: a fitted "how chalky" score or roster-construction
+  read (plan §0's "roster construction" bullet) — both need a model or a
+  live rosters call this step doesn't reach for; see the report on this
+  step.
+  """
+  @spec league_intel(integer | String.t(), keyword) :: map
+  def league_intel(league_id, opts \\ []) do
+    league_id = to_int(league_id)
+    season = opts[:season]
+
+    names = manager_names_by_id()
+
+    managers =
+      league_id
+      |> manager_ids_for_league(season)
+      |> Enum.map(fn user_id ->
+        stats = manager_corpus_stats(user_id)
+
+        %{
+          user_id: user_id,
+          display_name: Map.get(names, user_id),
+          leagues_count: stats.leagues_count,
+          drafts_count: stats.drafts_count,
+          drafts_complete: stats.drafts_complete,
+          tendencies: manager_tendencies(user_id)
+        }
+      end)
+      |> Enum.sort_by(&(&1.display_name || ""))
+
+    %{managers: managers, corpus: corpus_summary()}
+  end
+
+  defp manager_ids_for_league(league_id, season) do
+    base =
+      from(p in ObservedPick,
+        join: d in ObservedDraft,
+        on: d.id == p.draft_id,
+        where: d.league_id == ^league_id and not is_nil(p.picked_by)
+      )
+
+    query = if season, do: from([p, d] in base, where: d.season == ^season), else: base
+
+    query
+    |> distinct(true)
+    |> select([p, _d], p.picked_by)
+    |> Repo.all()
+  end
+
+  defp manager_corpus_stats(user_id) do
+    from(p in ObservedPick,
+      join: d in ObservedDraft,
+      on: d.id == p.draft_id,
+      where: p.picked_by == ^user_id,
+      select: %{
+        leagues_count: count(d.league_id, :distinct),
+        drafts_count: count(d.id, :distinct),
+        drafts_complete:
+          fragment("count(distinct case when ? = 'complete' then ? end)", d.status, d.id)
+      }
+    )
+    |> Repo.one()
+  end
+
+  defp corpus_summary do
+    drafts =
+      Repo.one(from(d in ObservedDraft, where: d.status == "complete", select: count(d.id))) || 0
+
+    picks =
+      Repo.one(
+        from(p in ObservedPick,
+          join: d in ObservedDraft,
+          on: d.id == p.draft_id,
+          where: d.status == "complete",
+          select: count(p.pick_no)
+        )
+      ) || 0
+
+    last_crawled_at = Repo.one(from(d in ObservedDraft, select: max(d.picks_fetched_at)))
+
+    %{drafts: drafts, picks: picks, last_crawled_at: last_crawled_at}
+  end
+
+  defp manager_tendencies(user_id) do
+    %{
+      crushes: manager_crushes(user_id),
+      position_lean: manager_position_lean(user_id),
+      reach_vs_adp: manager_reach_vs_adp(user_id)
+    }
+  end
+
+  @crush_limit 5
+
+  defp manager_crushes(user_id) do
+    rows =
+      from(p in ObservedPick,
+        join: d in ObservedDraft,
+        on: d.id == p.draft_id,
+        where: p.picked_by == ^user_id and d.status == "complete",
+        group_by: p.player_id,
+        order_by: [desc: count(p.pick_no)],
+        limit: ^@crush_limit,
+        select: %{player_id: p.player_id, times: count(p.pick_no)}
+      )
+      |> Repo.all()
+
+    seen = Map.get(manager_drafts_seen(), user_id, 0)
+    lookup = player_lookup(Enum.map(rows, & &1.player_id))
+
+    Enum.map(rows, fn row ->
+      info = Map.get(lookup, row.player_id, %{})
+
+      %{
+        player_id: row.player_id,
+        name: Map.get(info, :name),
+        position: Map.get(info, :position),
+        times: row.times,
+        of: seen
+      }
+    end)
+  end
+
+  defp manager_position_lean(user_id) do
+    rows =
+      from(p in ObservedPick,
+        join: d in ObservedDraft,
+        on: d.id == p.draft_id,
+        join: pl in SleeperPlayerApi.Sleeper.Player,
+        on: pl.player_id == p.player_id,
+        join: pos in SleeperPlayerApi.Sleeper.Position,
+        on: pos.id == pl.position_id,
+        where: p.picked_by == ^user_id and d.status == "complete",
+        group_by: pos.abbreviation,
+        select: {pos.abbreviation, count(p.pick_no)}
+      )
+      |> Repo.all()
+
+    total = rows |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+
+    if total == 0 do
+      []
+    else
+      rows
+      |> Enum.map(fn {position, n} ->
+        %{position: position, picks: n, share: Float.round(n / total, 3)}
+      end)
+      |> Enum.sort_by(&(-&1.picks))
+    end
+  end
+
+  defp manager_reach_vs_adp(user_id) do
+    own_adp =
+      from(p in ObservedPick,
+        join: d in ObservedDraft,
+        on: d.id == p.draft_id,
+        where: p.picked_by == ^user_id and d.status == "complete",
+        group_by: p.player_id,
+        select: %{
+          player_id: p.player_id,
+          own_adp: avg(fragment("((? - 1)::float / ? * 12) + 1", p.pick_no, d.teams))
+        }
+      )
+      |> Repo.all()
+
+    league = league_adp_batch(Enum.map(own_adp, & &1.player_id))
+
+    deltas =
+      for %{player_id: player_id, own_adp: mine} <- own_adp,
+          %{n: n, adp: league_adp} <- [Map.get(league, player_id)],
+          not is_nil(n) and n >= 2 do
+        league_adp - mine
+      end
+
+    case deltas do
+      [] -> nil
+      _ -> Float.round(Enum.sum(deltas) / length(deltas), 2)
+    end
+  end
+
+  defp league_adp_batch([]), do: %{}
+
+  defp league_adp_batch(player_ids) do
+    from(p in ObservedPick,
+      join: d in ObservedDraft,
+      on: d.id == p.draft_id,
+      where: p.player_id in ^player_ids,
+      group_by: p.player_id,
+      select: %{
+        player_id: p.player_id,
+        n: count(p.pick_no),
+        adp: avg(fragment("((? - 1)::float / ? * 12) + 1", p.pick_no, d.teams))
+      }
     )
     |> Repo.all()
-    |> Enum.map(fn {player_id, value} -> {to_string(player_id), value} end)
+    |> Map.new(&{&1.player_id, &1})
   end
 
   defp normalize_slot_map(nil), do: %{}
