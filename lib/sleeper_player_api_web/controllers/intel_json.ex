@@ -3,6 +3,12 @@ defmodule SleeperPlayerApiWeb.IntelJSON do
   Renders `SleeperPlayerApi.Intel.league_intel/2` into `/intel`'s response
   shape (plan §3e) — camelCase keys, same split (snake_case context,
   camelCase view) as `AvailabilityJSON`.
+
+  `corpus.membershipSource` is `"live"` when `managers` came from a live
+  `GET /league/:id/users` call (the normal case) or `"derived"` when that
+  call failed and the list fell back to observed-participation only — see
+  `Intel.league_intel/2`'s "Failure behaviour" doc. A `"derived"` list may
+  be missing 0-draft members.
   """
 
   def show(%{intel: i}) do
@@ -11,7 +17,8 @@ defmodule SleeperPlayerApiWeb.IntelJSON do
       corpus: %{
         drafts: i.corpus.drafts,
         picks: i.corpus.picks,
-        lastCrawledAt: i.corpus.last_crawled_at
+        lastCrawledAt: i.corpus.last_crawled_at,
+        membershipSource: i.corpus.membership_source
       }
     }
   end

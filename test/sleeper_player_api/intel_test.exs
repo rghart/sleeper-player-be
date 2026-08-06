@@ -1,5 +1,11 @@
 defmodule SleeperPlayerApi.IntelTest do
-  use SleeperPlayerApi.DataCase, async: true
+  # `league_intel/2` now makes a live `GET /league/:id/users` call (Gap 2 —
+  # see its moduledoc), so the `describe "league_intel/2"` block below points
+  # the Sleeper client at a Bypass server via the shared `:sleeper_base_url`
+  # Application env key (same trick as `CrawlLeaguemateDraftsTest`), which
+  # means this whole module can't run concurrently with itself or with
+  # anything else that touches that key.
+  use SleeperPlayerApi.DataCase, async: false
 
   alias SleeperPlayerApi.Intel
   alias SleeperPlayerApi.IntelCorpus
@@ -111,11 +117,71 @@ defmodule SleeperPlayerApi.IntelTest do
   end
 
   # ---------------------------------------------------------------------
+  # backfill_draft_participants/0 — the mandatory production catch-up
+  # ---------------------------------------------------------------------
+
+  describe "backfill_draft_participants/0" do
+    test "derives participant rows from observed_picks and is safe to run twice" do
+      Intel.upsert_observed_drafts([
+        %{id: 701, teams: 12, status: "complete"},
+        %{id: 702, teams: 12, status: "complete"}
+      ])
+
+      Intel.upsert_observed_picks(701, [
+        %{pick_no: 1, player_id: "P1", picked_by: 10},
+        %{pick_no: 2, player_id: "P2", picked_by: 11},
+        %{pick_no: 3, player_id: "P3", picked_by: 10}
+      ])
+
+      Intel.upsert_observed_picks(702, [
+        %{pick_no: 1, player_id: "P1", picked_by: 11},
+        %{pick_no: 2, player_id: "P2", picked_by: nil}
+      ])
+
+      # Simulate the exact production gap this backfills: observed_picks
+      # populated, draft_participants empty. `upsert_observed_picks/2`
+      # normally keeps the two in sync as it writes (see its doc) — but
+      # production accumulated its ~3,400 picks before that existed, so
+      # this wipes the table back to that pre-fix state before backfilling.
+      Repo.delete_all(SleeperPlayerApi.Intel.DraftParticipant)
+
+      assert Intel.backfill_draft_participants() == {3, nil}
+
+      rows_query =
+        from(dp in SleeperPlayerApi.Intel.DraftParticipant,
+          order_by: [dp.draft_id, dp.user_id],
+          select: {dp.draft_id, dp.user_id}
+        )
+
+      assert Repo.all(rows_query) == [{701, 10}, {701, 11}, {702, 11}]
+
+      # Idempotent: running again inserts nothing new and changes nothing.
+      assert Intel.backfill_draft_participants() == {0, nil}
+      assert Repo.all(rows_query) == [{701, 10}, {701, 11}, {702, 11}]
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # league_intel/2 (plan §3e / §3f step 5) — hand-built fixture, no corpus
   # ---------------------------------------------------------------------
 
   describe "league_intel/2" do
+    # Gap 2: `league_intel/2` now derives "who's a manager" from a live
+    # `GET /league/:id/users` call, not from `observed_picks`/
+    # `draft_participants` — see the moduledoc on `Intel.league_intel/2` for
+    # why. So this block needs a Bypass server the way
+    # `CrawlLeaguemateDraftsTest` does.
     setup do
+      bypass = Bypass.open()
+
+      Application.put_env(
+        :sleeper_player_api,
+        :sleeper_base_url,
+        "http://localhost:#{bypass.port}"
+      )
+
+      on_exit(fn -> Application.delete_env(:sleeper_player_api, :sleeper_base_url) end)
+
       Intel.upsert_sleeper_users([
         %{id: 100, display_name: "alice"},
         %{id: 200, display_name: "bob"}
@@ -124,8 +190,8 @@ defmodule SleeperPlayerApi.IntelTest do
       seed_player!("P1", "WR")
       seed_player!("P2", "RB")
 
-      # The home league (555), season 2026 — this is what `league_id`
-      # scopes "who's a manager" to.
+      # The home league (555), season 2026 — the league every test below
+      # analyzes.
       Intel.upsert_observed_drafts([
         %{id: 501, league_id: 555, season: "2026", status: "complete", teams: 12, rounds: 1}
       ])
@@ -137,7 +203,7 @@ defmodule SleeperPlayerApi.IntelTest do
 
       # Alice's other leagues (777, 999-via-bob) — these must count toward
       # her `leagues_count`/`drafts_count`/`reach_vs_adp` totals (not
-      # scoped to league 555) but must NOT make anyone a "manager of 555".
+      # scoped to league 555).
       Intel.upsert_observed_drafts([
         %{id: 502, league_id: 777, season: "2026", status: "complete", teams: 12, rounds: 1},
         %{id: 503, league_id: 555, season: "2025", status: "complete", teams: 12, rounds: 1},
@@ -148,13 +214,32 @@ defmodule SleeperPlayerApi.IntelTest do
       Intel.upsert_observed_picks(503, [%{pick_no: 5, player_id: "P1", picked_by: 100}])
       Intel.upsert_observed_picks(504, [%{pick_no: 1, player_id: "P1", picked_by: 200}])
 
-      :ok
+      {:ok, bypass: bypass}
     end
 
-    test "managers are scoped to league_id + season; per-manager counts are corpus-wide" do
+    defp stub_league_users(bypass, league_id, users) do
+      Bypass.stub(bypass, "GET", "/league/#{league_id}/users", fn conn ->
+        Plug.Conn.resp(conn, 200, Jason.encode!(users))
+      end)
+    end
+
+    defp fail_league_users(bypass, league_id) do
+      Bypass.stub(bypass, "GET", "/league/#{league_id}/users", fn conn ->
+        Plug.Conn.resp(conn, 500, "boom")
+      end)
+    end
+
+    test "managers come from the live /league/:id/users call; per-manager counts are corpus-wide",
+         %{bypass: bypass} do
+      stub_league_users(bypass, 555, [
+        %{"user_id" => "100", "display_name" => "alice"},
+        %{"user_id" => "200", "display_name" => "bob"}
+      ])
+
       %{managers: managers, corpus: corpus} = Intel.league_intel(555, season: "2026")
 
       assert Enum.map(managers, & &1.user_id) == [100, 200]
+      assert corpus.membership_source == :live
 
       alice = Enum.find(managers, &(&1.user_id == 100))
       assert alice.display_name == "alice"
@@ -172,10 +257,43 @@ defmodule SleeperPlayerApi.IntelTest do
       assert corpus.picks == 5
     end
 
-    test "season filter changes who counts as a manager, without changing their stats" do
-      %{managers: managers_2025} = Intel.league_intel(555, season: "2025")
+    test "a live league member with zero observed drafts appears with honest zeros, not absent",
+         %{bypass: bypass} do
+      # carol is a real league member Sleeper reports, but has never
+      # appeared in any stored draft — the exact case §3 Frontend needs
+      # ("league average · none of their drafts seen") and that deriving
+      # membership from observed_picks/draft_participants could never show.
+      stub_league_users(bypass, 555, [
+        %{"user_id" => "100", "display_name" => "alice"},
+        %{"user_id" => "200", "display_name" => "bob"},
+        %{"user_id" => "300", "display_name" => "carol"}
+      ])
+
+      %{managers: managers, corpus: corpus} = Intel.league_intel(555, season: "2026")
+
+      assert Enum.map(managers, & &1.user_id) == [100, 200, 300]
+      assert corpus.membership_source == :live
+
+      carol = Enum.find(managers, &(&1.user_id == 300))
+      assert carol.display_name == "carol"
+      assert carol.leagues_count == 0
+      assert carol.drafts_count == 0
+      assert carol.drafts_complete == 0
+      assert carol.tendencies.crushes == []
+      assert carol.tendencies.position_lean == []
+      assert carol.tendencies.reach_vs_adp == nil
+    end
+
+    test "when the live call fails, falls back to observed-participation-derived membership, honestly flagged",
+         %{bypass: bypass} do
+      fail_league_users(bypass, 555)
+
+      %{managers: managers_2025, corpus: corpus} = Intel.league_intel(555, season: "2025")
+
+      assert corpus.membership_source == :derived
       # Only draft 503 (season 2025) belongs to league 555 in that season,
-      # and only alice picked in it.
+      # and only alice picked in it — the derived fallback's season filter
+      # (the live path ignores `season` entirely, see the moduledoc).
       assert Enum.map(managers_2025, & &1.user_id) == [100]
 
       alice_2025 = hd(managers_2025)
@@ -184,30 +302,54 @@ defmodule SleeperPlayerApi.IntelTest do
       assert alice_2025.drafts_count == 3
     end
 
-    test "omitting season includes every stored season for this league_id" do
+    test "derived fallback: omitting season includes every stored season for this league_id",
+         %{bypass: bypass} do
+      fail_league_users(bypass, 555)
+
       %{managers: managers} = Intel.league_intel(555, [])
       assert Enum.map(managers, & &1.user_id) == [100, 200]
     end
 
-    test "a league_id with nothing crawled yet returns an empty managers list, not an error" do
-      assert %{managers: [], corpus: %{drafts: 4}} = Intel.league_intel(424_242, season: "2026")
+    test "an unknown league_id whose live call also fails returns an empty managers list, not an error",
+         %{bypass: bypass} do
+      fail_league_users(bypass, 424_242)
+
+      assert %{managers: [], corpus: %{drafts: 4, membership_source: :derived}} =
+               Intel.league_intel(424_242, season: "2026")
     end
 
-    test "tendencies.crushes: alice's repeated P1 picks across every league she's in" do
+    test "tendencies.crushes: alice's repeated P1 picks across every league she's in",
+         %{bypass: bypass} do
+      stub_league_users(bypass, 555, [
+        %{"user_id" => "100", "display_name" => "alice"},
+        %{"user_id" => "200", "display_name" => "bob"}
+      ])
+
       %{managers: managers} = Intel.league_intel(555, season: "2026")
       alice = Enum.find(managers, &(&1.user_id == 100))
 
       assert [%{player_id: "P1", times: 3, of: 3}] = alice.tendencies.crushes
     end
 
-    test "tendencies.position_lean: 100% of alice's picks are WR" do
+    test "tendencies.position_lean: 100% of alice's picks are WR", %{bypass: bypass} do
+      stub_league_users(bypass, 555, [
+        %{"user_id" => "100", "display_name" => "alice"},
+        %{"user_id" => "200", "display_name" => "bob"}
+      ])
+
       %{managers: managers} = Intel.league_intel(555, season: "2026")
       alice = Enum.find(managers, &(&1.user_id == 100))
 
       assert alice.tendencies.position_lean == [%{position: "WR", picks: 3, share: 1.0}]
     end
 
-    test "tendencies.reach_vs_adp: league ADP minus the manager's own ADP, n >= 2 only" do
+    test "tendencies.reach_vs_adp: league ADP minus the manager's own ADP, n >= 2 only",
+         %{bypass: bypass} do
+      stub_league_users(bypass, 555, [
+        %{"user_id" => "100", "display_name" => "alice"},
+        %{"user_id" => "200", "display_name" => "bob"}
+      ])
+
       %{managers: managers} = Intel.league_intel(555, season: "2026")
       alice = Enum.find(managers, &(&1.user_id == 100))
 
@@ -221,7 +363,8 @@ defmodule SleeperPlayerApi.IntelTest do
       assert_in_delta alice.tendencies.reach_vs_adp, -0.5, 0.001
     end
 
-    test "tendencies.reach_vs_adp is nil when no picked player clears the n >= 2 corpus threshold" do
+    test "tendencies.reach_vs_adp is nil when no picked player clears the n >= 2 corpus threshold",
+         %{bypass: bypass} do
       Intel.upsert_sleeper_users([%{id: 300, display_name: "carol"}])
       seed_player!("P3", "TE")
 
@@ -230,6 +373,12 @@ defmodule SleeperPlayerApi.IntelTest do
       ])
 
       Intel.upsert_observed_picks(505, [%{pick_no: 1, player_id: "P3", picked_by: 300}])
+
+      stub_league_users(bypass, 555, [
+        %{"user_id" => "100", "display_name" => "alice"},
+        %{"user_id" => "200", "display_name" => "bob"},
+        %{"user_id" => "300", "display_name" => "carol"}
+      ])
 
       %{managers: managers} = Intel.league_intel(555, season: "2026")
       carol = Enum.find(managers, &(&1.user_id == 300))

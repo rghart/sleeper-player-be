@@ -5,8 +5,16 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDraftsTest do
   # with itself or with anything else that touches that key.
   use SleeperPlayerApi.DataCase, async: false
 
+  alias SleeperPlayerApi.Intel
   alias SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts
-  alias SleeperPlayerApi.Intel.{ObservedDraft, ObservedPick, ObservedTradedPick, SleeperUser}
+
+  alias SleeperPlayerApi.Intel.{
+    DraftParticipant,
+    ObservedDraft,
+    ObservedPick,
+    ObservedTradedPick,
+    SleeperUser
+  }
 
   setup do
     bypass = Bypass.open()
@@ -470,6 +478,105 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDraftsTest do
       # one per unique draft) — no traded_picks calls at all.
       assert summary.api_calls == 6
       assert Enum.map([t1, t2, t3], &hits/1) == [0, 0, 0]
+    end
+  end
+
+  describe "draft_participants (Gap 1: populated by a real crawl, not seeded)" do
+    # Regression per the report on this step: `draft_participants` existed
+    # with a passing unit test on `Intel.upsert_draft_participants/2`
+    # directly, but nothing in the crawl path called it, so production had
+    # 0 rows. These tests drive the real `crawl/2` against Bypass — no
+    # DB-seeding helper in the path — and assert on the table and the
+    # participation query it feeds, per
+    # `tests-that-bypass-the-crawler` lessons.
+    test "a crawled draft's distinct pickers land in draft_participants, and manager_drafts_seen counts them",
+         %{bypass: bypass} do
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"},
+        %{"user_id" => "200", "display_name" => "bob", "avatar" => "av2"}
+      ])
+
+      expect_json(bypass, "/user/100/drafts/nfl/2026", [draft("1001", "complete")])
+      expect_json(bypass, "/user/200/drafts/nfl/2026", [draft("1001", "complete")])
+
+      # alice picks twice, bob once, one pick unattributed (nil) — draft
+      # participation must be distinct pickers, not distinct picks.
+      expect_json(bypass, "/draft/1001/picks", [
+        pick(1, "P1", "100"),
+        pick(2, "P2", "200"),
+        pick(3, "P3", "100"),
+        pick(4, "P4", nil)
+      ])
+
+      stub_json(bypass, "/draft/1001/traded_picks", [])
+
+      assert {:ok, _summary} = CrawlLeaguemateDrafts.crawl(555, "2026")
+
+      rows =
+        Repo.all(from(dp in DraftParticipant, where: dp.draft_id == 1001, order_by: dp.user_id))
+
+      assert Enum.map(rows, & &1.user_id) == [100, 200]
+
+      seen = Intel.manager_drafts_seen()
+      assert Map.get(seen, 100) == 1
+      assert Map.get(seen, 200) == 1
+    end
+
+    test "a picker who isn't one of this league's own leaguemates still gets a participant row (no FK crash)",
+         %{bypass: bypass} do
+      # alice's OTHER league draft is full of co-managers `sleeper_users`
+      # never heard of via `/league/555/users` — draft_participants must not
+      # have a hard FK to sleeper_users (see
+      # `20260806140000_drop_draft_participants_user_fk.exs`) or this raises.
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"}
+      ])
+
+      expect_json(bypass, "/user/100/drafts/nfl/2026", [draft("1001", "complete")])
+
+      expect_json(bypass, "/draft/1001/picks", [
+        pick(1, "P1", "100"),
+        pick(2, "P2", "999")
+      ])
+
+      stub_json(bypass, "/draft/1001/traded_picks", [])
+
+      assert {:ok, summary} = CrawlLeaguemateDrafts.crawl(555, "2026")
+      assert summary.errors == []
+
+      rows =
+        Repo.all(from(dp in DraftParticipant, where: dp.draft_id == 1001, order_by: dp.user_id))
+
+      assert Enum.map(rows, & &1.user_id) == [100, 999]
+      refute Repo.get(SleeperUser, 999)
+    end
+
+    test "a pre_draft draft (no picks fetched) gets no participant rows", %{bypass: bypass} do
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"}
+      ])
+
+      expect_json(bypass, "/user/100/drafts/nfl/2026", [draft("1003", "pre_draft")])
+
+      assert {:ok, _summary} = CrawlLeaguemateDrafts.crawl(555, "2026")
+
+      assert Repo.all(from(dp in DraftParticipant, where: dp.draft_id == 1003)) == []
+    end
+
+    test "re-crawling an in-progress draft doesn't duplicate participant rows", %{bypass: bypass} do
+      expect_json(bypass, "/league/555/users", [
+        %{"user_id" => "100", "display_name" => "alice", "avatar" => "av1"}
+      ])
+
+      expect_json(bypass, "/user/100/drafts/nfl/2026", [draft("1002", "drafting")])
+      expect_json(bypass, "/draft/1002/picks", [pick(1, "P1", "100")])
+      expect_json(bypass, "/draft/1002/traded_picks", [])
+
+      assert {:ok, _} = CrawlLeaguemateDrafts.crawl(555, "2026")
+      assert {:ok, _} = CrawlLeaguemateDrafts.crawl(555, "2026")
+
+      rows = Repo.all(from(dp in DraftParticipant, where: dp.draft_id == 1002))
+      assert length(rows) == 1
     end
   end
 end
