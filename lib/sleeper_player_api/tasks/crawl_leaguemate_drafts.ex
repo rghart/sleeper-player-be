@@ -138,6 +138,56 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts do
     end
   end
 
+  @doc """
+  Refreshes ONE draft's picks/traded_picks on demand, regardless of its
+  currently stored status — the `/availability` endpoint's use case (plan
+  §3f step 4 scope note: fetching a live in-progress draft "may need
+  fetching on demand... reuse [the crawler's refresh rule], don't write a
+  second fetch path").
+
+  Fetches `GET /draft/:id` for the draft's current settings/status, then
+  hands off to the same private `fetch_draft_picks/3` that `crawl/2` uses —
+  so there's exactly one place in the codebase that knows how to fetch and
+  store a draft's picks, not two. Unlike `crawl/2`'s per-draft branch, this
+  always fetches (a caller reaching for a single-draft refresh already
+  wants fresh data right now); the "complete drafts are immutable, skip
+  them" short-circuit belongs to the many-drafts league crawl, not this
+  path — callers that only want to refresh actually-live drafts should
+  check `status` themselves before calling this (see
+  `SleeperPlayerApi.Intel.availability/2`).
+
+  Returns `{:ok, %Summary{}}` (same shape as `crawl/2`, `api_calls` counts
+  the calls this made) or `{:error, reason}` if even `/draft/:id` fails.
+  """
+  @spec refresh_draft(integer | String.t()) :: {:ok, Summary.t()} | {:error, term}
+  def refresh_draft(draft_id) do
+    summary = %Summary{}
+
+    case request("/draft/#{draft_id}", summary) do
+      {{:ok, draft}, summary} ->
+        id = draft_id(draft)
+        existing = existing_draft_state([id])
+        prior = Map.get(existing, id)
+
+        # `observed_picks` has an FK on `observed_drafts` — same ordering
+        # constraint `crawl/2` handles by pre-inserting a placeholder row
+        # before fetching any picks (see its own comment on this).
+        Intel.upsert_observed_drafts([draft_row(draft, picks_fetched_at: prior_fetched_at(prior))])
+
+        {row, summary} = fetch_draft_picks(draft, prior, summary)
+        Intel.upsert_observed_drafts([row])
+
+        {:ok, summary}
+
+      {{:error, reason}, summary} ->
+        Logger.warning(
+          "CrawlLeaguemateDrafts: refresh_draft(#{draft_id}) could not fetch /draft/#{draft_id}: #{inspect(reason)}"
+        )
+
+        {:error, {:draft_fetch_failed, reason, summary}}
+    end
+  end
+
   # ---------------------------------------------------------------------
   # Leaguemates + their drafts
   # ---------------------------------------------------------------------
@@ -299,6 +349,7 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts do
     %{
       id: draft_id(draft),
       league_id: to_int(draft["league_id"]),
+      league_name: get_in(draft, ["metadata", "name"]),
       season: draft["season"],
       status: draft["status"],
       draft_type: draft["type"],
