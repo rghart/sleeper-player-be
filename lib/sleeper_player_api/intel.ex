@@ -700,7 +700,37 @@ defmodule SleeperPlayerApi.Intel do
     * `:at_pick` — analyze as if the draft were currently at this pick
       instead of its actual next open one (plan §3g hypotheticals).
       Defaults to the draft's actual next pick.
-    * `:limit` — how many corpus players become `targets` (default 20)
+    * `:limit` — how many corpus players become `targets` (default 20, or
+      the length of `:player_ids` when that is given)
+    * `:player_ids` — restrict `targets` to these players (plan §6 step 3).
+      See "Caller-chosen targets" below.
+
+  ## Caller-chosen targets
+
+  Without `:player_ids` this picks the targets itself: every corpus player
+  still on the board, ordered by league ADP, capped at `:limit`. That is a
+  reasonable default for a caller with no opinion, but the frontend has
+  one — "Best Available" means *the user's own rank list* everywhere else
+  in that app, so it asks about exactly those players and joins the answer
+  onto rows it is already rendering.
+
+  Two consequences worth being explicit about, because both are deliberate:
+
+    * **Explicit ids replace the internal eligibility filters** rather than
+      intersecting with them. `eligible_ids/1`'s position and market
+      filters exist to stop a thin-sample junk player out-ranking real
+      targets when 20 are being *selected* from a pool of hundreds. When
+      the caller names the players, nothing is being selected and that
+      pressure is gone — so filtering further could only drop a player the
+      caller explicitly asked about, and the caller cannot tell that
+      "absent" from "the corpus has never seen him".
+    * **Corpus membership still applies.** A player nobody in the circle
+      has ever drafted has no survival curve to compute and is silently
+      absent from `targets` at any limit. That is the honest "no read"
+      case, and the caller renders it as such.
+
+  The default of `:limit` follows `:player_ids` so that asking about a
+  40-player rank list doesn't silently answer for 20 of them.
 
   Refreshes the draft's own picks/traded_picks first when it isn't stored
   yet or its stored status is `"drafting"`, via
@@ -721,15 +751,21 @@ defmodule SleeperPlayerApi.Intel do
     draft_id = to_int(draft_id)
     my_user_id = opts |> Keyword.fetch!(:user_id) |> to_int()
     at_pick = opts[:at_pick]
-    limit = Keyword.get(opts, :limit, 20)
+    player_ids = opts[:player_ids]
+    limit = Keyword.get(opts, :limit) || default_limit(player_ids)
 
     with :ok <- ensure_fresh(draft_id) do
       case get_observed_draft(draft_id) do
         nil -> {:error, :draft_not_found}
-        draft -> build_availability(draft, my_user_id, at_pick, limit)
+        draft -> build_availability(draft, my_user_id, at_pick, limit, player_ids)
       end
     end
   end
+
+  # A caller naming its players wants an answer about all of them, not the
+  # 20 of them with the earliest league ADP — see "Caller-chosen targets".
+  defp default_limit(nil), do: 20
+  defp default_limit(player_ids), do: length(player_ids)
 
   defp ensure_fresh(draft_id) do
     case get_observed_draft(draft_id) do
@@ -746,7 +782,7 @@ defmodule SleeperPlayerApi.Intel do
     end
   end
 
-  defp build_availability(draft, my_user_id, at_pick, limit) do
+  defp build_availability(draft, my_user_id, at_pick, limit, player_ids) do
     picks_made = draft_picks(draft.id)
     traded_picks = draft_traded_picks(draft.id)
 
@@ -782,7 +818,7 @@ defmodule SleeperPlayerApi.Intel do
         candidate_lookup: player_lookup(candidate_ids),
         market_rank: Estimator.rookie_class_rank(market_rookie_class_entries(draft.season)),
         raw_picks: manager_pick_strings(candidate_ids, user_id_to_manager),
-        eligible_ids: eligible_ids(candidate_ids)
+        eligible_ids: eligible_ids(candidate_ids, player_ids)
       })
     end
   end
@@ -857,6 +893,14 @@ defmodule SleeperPlayerApi.Intel do
   # this step for anyone who hasn't run `RefreshPlayerValues` yet, which is
   # also why the existing acceptance tests (no `player_values` seeded) pass
   # unchanged.
+  # When the caller named its own players, that set *is* the eligibility —
+  # both filters below are selection aids, and nothing is being selected.
+  # See `availability/2`'s "Caller-chosen targets".
+  defp eligible_ids(_candidate_ids, player_ids) when is_list(player_ids),
+    do: MapSet.new(player_ids)
+
+  defp eligible_ids(candidate_ids, nil), do: eligible_ids(candidate_ids)
+
   defp eligible_ids(candidate_ids) do
     position_ids = fantasy_position_ids(candidate_ids)
     market_ids = market_universe_ids()
