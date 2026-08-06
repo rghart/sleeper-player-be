@@ -68,6 +68,26 @@ defmodule SleeperPlayerApi.Intel.PickOwnershipTest do
       assert PickOwnership.resolve_roster(1, 12, "snek", slot_to_roster_id, %{}) ==
                {:error, {:unsupported_draft_type, "snek"}}
     end
+
+    test "an empty slot_to_roster_id is an error, not a KeyError crash" do
+      # Regression: a real production draft had `slot_to_roster_id: %{}`
+      # (the crawler's own `/user/:id/drafts/nfl/:season` listing call
+      # never returns that field — see `SleeperPlayerApi.Intel.
+      # fetch_slot_to_roster_id/1`). `Map.fetch!/2` turned that into an
+      # uncaught `KeyError` and a 500; this must come back as a tagged
+      # error instead.
+      assert PickOwnership.resolve_roster(1, 12, "linear", %{}, %{}) ==
+               {:error, {:unmapped_slot, 1}}
+    end
+
+    test "a partial slot_to_roster_id errors only for the slot that's actually missing" do
+      partial = %{1 => 1, 2 => 2}
+
+      assert PickOwnership.resolve_roster(1, 12, "linear", partial, %{}) == {:ok, 1}
+
+      assert PickOwnership.resolve_roster(3, 12, "linear", partial, %{}) ==
+               {:error, {:unmapped_slot, 3}}
+    end
   end
 
   describe "resolve_board/5 — the §4f acceptance case" do

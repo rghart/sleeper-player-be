@@ -19,7 +19,10 @@ defmodule SleeperPlayerApi.Intel do
 
   `availability/2` (plan §3f step 4) is the one exception to "no HTTP" —
   resolving trade-aware pick ownership needs a live `/league/:id/rosters`
-  call (see its doc) and, for an in-progress draft, a refresh through
+  call (see its doc) and a live `/draft/:id` call for `slot_to_roster_id`
+  (see `fetch_slot_to_roster_id/1` — the crawler's own listing call never
+  gets that field, so it can't come from the DB alone) and, for an
+  in-progress draft, a refresh through
   `SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts.refresh_draft/1`.
   """
 
@@ -477,6 +480,53 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
+  Live `slot -> roster_id` for one draft, via `GET /draft/:id` — deliberately
+  not read from the stored `observed_drafts.slot_to_roster_id` column.
+
+  `GET /user/:id/drafts/nfl/:season` (what `CrawlLeaguemateDrafts` reads to
+  discover and store a leaguemate's drafts) doesn't include
+  `slot_to_roster_id` at all — confirmed against the harvested corpus
+  (`test/support/corpus/rookie_drafts.json` has no such key on any entry,
+  while `GET /draft/:id`'s own payload, `test/support/corpus/d13.json`,
+  does). So a draft the crawler has only ever seen via that listing call —
+  which is every `"complete"` draft once it stops being refreshed — has
+  `slot_to_roster_id: nil` in the DB forever, and
+  `PickOwnership.resolve_roster/5` needs an authoritative mapping to
+  resolve pick ownership. This fetches it fresh for the one draft being
+  analyzed, same request-scoped live-fetch pattern as
+  `fetch_roster_owners/1` above (one extra call, no new table), rather than
+  trusting whatever's stored.
+
+  Also persists the fetched map onto the `observed_drafts` row (keyed on
+  `id`, replacing only `slot_to_roster_id`) — the column already exists and
+  is otherwise dead for any draft the crawler found via the listing call, so
+  this is a cheap opportunistic backfill: once a draft has been analyzed
+  once, later reads of the stored row (if anything ever needs one) see the
+  real mapping too.
+  """
+  @spec fetch_slot_to_roster_id(integer) :: {:ok, %{integer => integer}} | {:error, term}
+  def fetch_slot_to_roster_id(draft_id) do
+    case Sleeper.get("/draft/#{draft_id}") do
+      {:ok, response} ->
+        raw = Map.get(response, "slot_to_roster_id") || %{}
+        persist_slot_to_roster_id(draft_id, raw)
+        {:ok, normalize_slot_map(raw)}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp persist_slot_to_roster_id(draft_id, slot_to_roster_id) do
+    insert_all_batched(
+      ObservedDraft,
+      [%{id: draft_id, slot_to_roster_id: slot_to_roster_id}],
+      conflict_target: [:id],
+      replace: [:slot_to_roster_id]
+    )
+  end
+
+  @doc """
   `%{player_id => %{name, position}}` for a set of Sleeper player ids,
   joined from the `players` table (populated by the nightly
   `GetSleeperPlayerData` job, per plan §3f step 4 "should come from the
@@ -625,9 +675,9 @@ defmodule SleeperPlayerApi.Intel do
   defp build_availability(draft, my_user_id, at_pick, limit) do
     picks_made = draft_picks(draft.id)
     traded_picks = draft_traded_picks(draft.id)
-    slot_to_roster_id = normalize_slot_map(draft.slot_to_roster_id)
 
-    with {:ok, roster_to_user} <- fetch_roster_owners(draft.league_id) do
+    with {:ok, slot_to_roster_id} <- fetch_slot_to_roster_id(draft.id),
+         {:ok, roster_to_user} <- fetch_roster_owners(draft.league_id) do
       user_id_to_manager = manager_names_by_id()
       corpus = drafts_corpus(user_id_to_manager, exclude_draft_id: draft.id)
 

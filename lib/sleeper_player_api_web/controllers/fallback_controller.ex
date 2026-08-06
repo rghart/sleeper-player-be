@@ -44,6 +44,17 @@ defmodule SleeperPlayerApiWeb.FallbackController do
     |> Phoenix.Controller.json(%{errors: %{detail: "unsupported draft type: #{type}"}})
   end
 
+  # `PickOwnership.resolve_roster/5` couldn't find a roster for a draft
+  # slot — Sleeper's `slot_to_roster_id` was missing or incomplete for this
+  # draft. Same "hard failure, never a fabricated board" reasoning as
+  # `:unsupported_draft_type` above.
+  def call(conn, {:error, {:unmapped_slot, slot}}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{errors: %{detail: "no roster mapped for draft slot #{slot}"}})
+  end
+
   # Anything else an action returns as `{:error, reason}` — e.g. the
   # `/league/:id/rosters` fetch in `Intel.availability/2` failing.
   def call(conn, {:error, reason}) do
