@@ -96,6 +96,55 @@ defmodule SleeperPlayerApi.Intel.AvailabilityTest do
     end
   end
 
+  describe "a draft that has already finished" do
+    # Regression: found by hitting the deployed endpoint against the real
+    # District 13 draft, which completed after the corpus was harvested.
+    # Every other test here uses a mid-draft board, so nothing caught it.
+    #
+    # `current_pick` becomes `last_pick + 1` once the final pick is in, and a
+    # bare `a..b` range in Elixir silently reverses when a > b. The board came
+    # back as [49, 48]: one pick that never existed, one already made.
+    setup do
+      # 4 teams x 2 rounds = 8 picks, all of them made.
+      picks_made = for n <- 1..8, do: %{pick_no: n, player_id: "P#{n}"}
+      {:ok, input: base_input(%{picks_made: picks_made})}
+    end
+
+    test "reports no remaining picks rather than phantom ones", %{input: input} do
+      assert {:ok, response} = Availability.build(input)
+
+      assert response.current_pick == 9
+      assert response.last_pick == 8
+      assert response.board == []
+      assert response.my_picks == []
+    end
+
+    test "does not invent a byPick column for a pick that cannot happen", %{input: input} do
+      # "P99" is deliberately NOT among the made picks (P1..P8), so it really
+      # is still a candidate and `targets` is non-empty — otherwise the
+      # assertion below would loop over nothing and pass vacuously.
+      corpus = [
+        %{l_d: 8.0, picks: [%{norm: 2.0, player_id: "P99", manager: "bob"}]}
+      ]
+
+      assert {:ok, response} =
+               Availability.build(
+                 Map.merge(input, %{
+                   corpus: corpus,
+                   candidate_lookup: %{"P99" => %{name: "Player Ninetynine", position: "WR"}}
+                 })
+               )
+
+      assert [target] = response.targets
+
+      assert Map.keys(target.by_pick) == [9],
+             "expected only the current pick's column, got #{inspect(Map.keys(target.by_pick))}"
+
+      assert target.by_pick[9].base_survival == 1.0
+      assert target.by_pick[9].threats == []
+    end
+  end
+
   describe "corpus-missing failure behaviour (plan §3e)" do
     test "an empty corpus returns targets: [] and corpusDrafts: 0, never fabricated survival numbers" do
       assert {:ok, response} = Availability.build(base_input())

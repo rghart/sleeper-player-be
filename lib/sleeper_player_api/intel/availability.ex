@@ -80,7 +80,14 @@ defmodule SleeperPlayerApi.Intel.Availability do
 
     with {:ok, board_rosters} <-
            PickOwnership.resolve_board(
-             current_pick..last_pick,
+             # `//1` is load-bearing: a bare `a..b` where a > b silently
+             # becomes a DESCENDING range. Once a draft finishes,
+             # `current_pick` is `last_pick + 1`, so `49..48` yielded a board
+             # of [49, 48] — one pick that never existed and one already
+             # made — instead of the empty board that says "no picks left".
+             # Found by hitting the endpoint against the real, now-completed
+             # District 13 draft; every test used a mid-draft board.
+             current_pick..last_pick//1,
              input.teams,
              input.draft_type,
              input.slot_to_roster_id,
@@ -201,8 +208,9 @@ defmodule SleeperPlayerApi.Intel.Availability do
 
     board_mult_fun = fn pick -> mult_fun.(Map.get(board_owner, pick)) end
 
+    # `//1` for the same reason as the board range above.
     by_pick =
-      for pick <- current_pick..(last_pick + 1), into: %{} do
+      for pick <- current_pick..(last_pick + 1)//1, into: %{} do
         base_survival = Estimator.base_survival(hazard, current_pick, pick)
         adj_survival = Estimator.adjusted_survival(hazard, current_pick, pick, board_mult_fun)
 
