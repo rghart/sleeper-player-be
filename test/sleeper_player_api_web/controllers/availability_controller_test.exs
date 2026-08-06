@@ -7,6 +7,9 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
   use SleeperPlayerApiWeb.ConnCase, async: false
 
   alias SleeperPlayerApi.Intel
+  alias SleeperPlayerApi.Intel.ObservedDraft
+  alias SleeperPlayerApi.Repo
+  alias SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts
 
   @corpus_dir Path.expand("../../support/corpus", __DIR__)
   @draft_id "1313425233306198016"
@@ -166,6 +169,113 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       assert body["corpusDrafts"] == 0
       assert body["targets"] == []
       assert Enum.find(body["board"], &(&1["pick"] == 35))["manager"] == "atekipp"
+    end
+  end
+
+  describe "GET /api/v1/drafts/:draft_id/availability — draft state produced by the crawler, not seeded" do
+    # Regression for a production 500. Every other describe block above
+    # seeds `observed_drafts` directly (`seed_corpus_from_json!`,
+    # `upsert_observed_drafts` in this file's own helpers), which writes
+    # whatever `slot_to_roster_id` the test fixture happens to include.
+    # That's not what the crawler can ever actually produce: `GET
+    # /user/:id/drafts/nfl/:season` — the only call `CrawlLeaguemateDrafts`
+    # makes to discover a draft — doesn't return `slot_to_roster_id` at
+    # all. So a draft that's `"complete"` (never refreshed again by
+    # `ensure_fresh/1`) has `slot_to_roster_id: nil` in the DB forever once
+    # it's gone through a *real* `CrawlLeaguemateDrafts.crawl/2`, not a
+    # seeding helper — and `/availability` 500'd on exactly that column
+    # against real production data.
+    #
+    # This block runs the actual crawler against Bypass stubs shaped like
+    # real Sleeper responses (no `slot_to_roster_id` on the listing call,
+    # same as `CrawlLeaguemateDraftsTest`'s fixtures), then hits
+    # `/availability` against the state it left behind.
+    @small_league_id "999"
+    @small_user_id "100"
+    @small_draft_id "5000"
+
+    defp small_draft(status) do
+      %{
+        "draft_id" => @small_draft_id,
+        "league_id" => @small_league_id,
+        "season" => "2026",
+        "status" => status,
+        "type" => "linear",
+        "start_time" => 1_700_000_000_000,
+        "settings" => %{"player_type" => 1, "teams" => 2, "rounds" => 3}
+        # Deliberately no "slot_to_roster_id" key — real
+        # `/user/:id/drafts/nfl/:season` responses don't have one either.
+      }
+    end
+
+    defp small_pick(pick_no, player_id, picked_by) do
+      %{
+        "pick_no" => pick_no,
+        "round" => 1,
+        "draft_slot" => pick_no,
+        "roster_id" => pick_no,
+        "player_id" => player_id,
+        "picked_by" => picked_by
+      }
+    end
+
+    setup %{bypass: bypass} do
+      respond_json(bypass, "GET", "/league/#{@small_league_id}/users", [
+        %{"user_id" => @small_user_id, "username" => "alice_u", "display_name" => "alice"}
+      ])
+
+      respond_json(bypass, "GET", "/user/#{@small_user_id}/drafts/nfl/2026", [
+        small_draft("complete")
+      ])
+
+      # Only 2 of the draft's 6 picks are "made" — leaves picks 3-6 for
+      # `/availability` to resolve against `slot_to_roster_id`, which is
+      # exactly the path that raised.
+      respond_json(bypass, "GET", "/draft/#{@small_draft_id}/picks", [
+        small_pick(1, "P1", @small_user_id),
+        small_pick(2, "P2", nil)
+      ])
+
+      # `/availability`'s live fetch for the analyzed draft — the fix under
+      # test. Has to be the full draft object (status "complete" here,
+      # matching what's stored) with a real `slot_to_roster_id`, unlike the
+      # listing call above.
+      respond_json(bypass, "GET", "/draft/#{@small_draft_id}", %{
+        "draft_id" => @small_draft_id,
+        "league_id" => @small_league_id,
+        "status" => "complete",
+        "type" => "linear",
+        "slot_to_roster_id" => %{"1" => 1, "2" => 2}
+      })
+
+      respond_json(bypass, "GET", "/league/#{@small_league_id}/rosters", [
+        %{"roster_id" => 1, "owner_id" => @small_user_id},
+        %{"roster_id" => 2, "owner_id" => "200"}
+      ])
+
+      assert {:ok, %{drafts_fetched: 1}} = CrawlLeaguemateDrafts.crawl(@small_league_id, "2026")
+
+      assert %ObservedDraft{status: "complete", slot_to_roster_id: nil} =
+               Repo.get!(ObservedDraft, String.to_integer(@small_draft_id))
+
+      :ok
+    end
+
+    test "resolves the board instead of 500ing on the crawler's own slot_to_roster_id gap", %{
+      conn: conn
+    } do
+      conn =
+        get(conn, ~p"/api/v1/drafts/#{@small_draft_id}/availability?user_id=#{@small_user_id}")
+
+      body = json_response(conn, 200)
+
+      assert body["currentPick"] == 3
+      assert body["lastPick"] == 6
+
+      board = Enum.map(body["board"], &{&1["pick"], &1["mine"]})
+      # slot 1 -> roster 1 -> alice (owner_id 100, this request's user);
+      # slot 2 -> roster 2 -> owner_id 200, not this request's user.
+      assert board == [{3, true}, {4, false}, {5, true}, {6, false}]
     end
   end
 

@@ -64,16 +64,32 @@ defmodule SleeperPlayerApi.Intel.PickOwnership do
   Sleeper's own JSON has string keys; callers normalize before calling
   this). `traded_picks` is `%{{round, original_roster_id} => new_roster_id}`
   — a pick not present in that map is still owned by its original roster.
+
+  A slot missing from `slot_to_roster_id` (empty map, or a hole in it) is a
+  data problem — the crawler couldn't populate the mapping, or Sleeper
+  hasn't assigned that slot yet — not a crash: `{:error, {:unmapped_slot,
+  slot}}`, same shape as the unsupported-draft-type error, rather than
+  `Map.fetch!/2` raising `KeyError` and turning one bad row into a 500 (hit
+  in production against a real draft whose `slot_to_roster_id` was `%{}`).
   """
   @spec resolve_roster(pos_integer, pos_integer, String.t(), %{integer => integer}, %{
           {integer, integer} => integer
-        }) :: {:ok, integer} | {:error, {:unsupported_draft_type, String.t()}}
+        }) ::
+          {:ok, integer}
+          | {:error, {:unsupported_draft_type, String.t()} | {:unmapped_slot, pos_integer}}
   def resolve_roster(pick_no, teams, draft_type, slot_to_roster_id, traded_picks) do
-    with {:ok, slot} <- slot_of(pick_no, teams, draft_type) do
+    with {:ok, slot} <- slot_of(pick_no, teams, draft_type),
+         {:ok, original_roster} <- fetch_roster(slot_to_roster_id, slot) do
       round = round_of(pick_no, teams)
-      original_roster = Map.fetch!(slot_to_roster_id, slot)
       true_roster = Map.get(traded_picks, {round, original_roster}, original_roster)
       {:ok, true_roster}
+    end
+  end
+
+  defp fetch_roster(slot_to_roster_id, slot) do
+    case Map.fetch(slot_to_roster_id, slot) do
+      {:ok, roster_id} -> {:ok, roster_id}
+      :error -> {:error, {:unmapped_slot, slot}}
     end
   end
 
