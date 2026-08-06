@@ -5,6 +5,7 @@ defmodule SleeperPlayerApi.Intel.ObservedDraft do
   @primary_key {:id, :id, autogenerate: false}
   schema "observed_drafts" do
     field :league_id, :integer
+    field :league_name, :string
     field :season, :string
     field :status, :string
     field :draft_type, :string
@@ -24,6 +25,7 @@ defmodule SleeperPlayerApi.Intel.ObservedDraft do
     |> cast(attrs, [
       :id,
       :league_id,
+      :league_name,
       :season,
       :status,
       :draft_type,

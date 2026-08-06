@@ -13,4 +13,43 @@ defmodule SleeperPlayerApiWeb.FallbackController do
     |> put_view(html: SleeperPlayerApiWeb.ErrorHTML, json: SleeperPlayerApiWeb.ErrorJSON)
     |> render(:"404")
   end
+
+  # `AvailabilityController` (plan §3f step 4): the draft id in the URL
+  # isn't in Sleeper at all (never crawled, and `/draft/:id` itself 404s).
+  def call(conn, {:error, :draft_not_found}) do
+    conn
+    |> put_status(:not_found)
+    |> put_view(html: SleeperPlayerApiWeb.ErrorHTML, json: SleeperPlayerApiWeb.ErrorJSON)
+    |> render(:"404")
+  end
+
+  # A required query param is missing (`AvailabilityController` requires
+  # `user_id`).
+  def call(conn, {:error, {:missing_param, key}}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{errors: %{detail: "missing required param: #{key}"}})
+  end
+
+  # `SleeperPlayerApi.Intel.PickOwnership` couldn't resolve the draft's own
+  # order (not `"linear"`/`"snake"`) — per `Availability`'s moduledoc, this
+  # is a hard failure rather than a degraded response, because serving
+  # survival numbers computed from unresolved pick ownership is the one
+  # thing the plan says this feature must never do.
+  def call(conn, {:error, {:unsupported_draft_type, type}}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{errors: %{detail: "unsupported draft type: #{type}"}})
+  end
+
+  # Anything else an action returns as `{:error, reason}` — e.g. the
+  # `/league/:id/rosters` fetch in `Intel.availability/2` failing.
+  def call(conn, {:error, reason}) do
+    conn
+    |> put_status(:bad_gateway)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{errors: %{detail: inspect(reason)}})
+  end
 end

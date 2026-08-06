@@ -17,12 +17,17 @@ defmodule SleeperPlayerApi.Intel do
       `test/support/intel_corpus.ex` builds from JSON, so the estimator is
       indifferent to which one fed it.
 
-  No HTTP, no crawler, no controllers here — see plan §3f step 1.
+  `availability/2` (plan §3f step 4) is the one exception to "no HTTP" —
+  resolving trade-aware pick ownership needs a live `/league/:id/rosters`
+  call (see its doc) and, for an in-progress draft, a refresh through
+  `SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts.refresh_draft/1`.
   """
 
   import Ecto.Query, warn: false
 
   alias SleeperPlayerApi.Repo
+  alias SleeperPlayerApi.Client.Sleeper
+  alias SleeperPlayerApi.Intel.{Estimator, Availability}
 
   alias SleeperPlayerApi.Intel.{
     SleeperUser,
@@ -66,6 +71,7 @@ defmodule SleeperPlayerApi.Intel do
       conflict_target: [:id],
       replace: [
         :league_id,
+        :league_name,
         :season,
         :status,
         :draft_type,
@@ -208,20 +214,42 @@ defmodule SleeperPlayerApi.Intel do
   determinism; `IntelCorpus.drafts/0` preserves JSON array order, which is
   already pick order, so the two are directly comparable once sorted the
   same way.
+
+  Only `status == "complete"` drafts are included — the estimator's own
+  vocabulary (`docs/leaguemate-intel-estimator.md` §0) defines the corpus
+  as "the *completed* rookie drafts observed", and an in-progress draft's
+  `l_d` moves every time it's refetched, which would make the corpus (and
+  therefore every survival number computed from it) shift under a caller's
+  feet mid-request. This was unfiltered before `/availability` needed it —
+  nothing consumed it in a way that could tell the difference yet — so this
+  is a real behaviour change, not a no-op refactor; see the PR/report for
+  the plan gap this closes.
+
+  `opts[:exclude_draft_id]` additionally drops one specific draft from the
+  corpus — for `/availability`, that's the very draft being analyzed. A
+  live in-progress draft has `status == "drafting"` so §-filter above
+  already excludes it, but the option exists for the moment that draft
+  finishes: without it, a completed live draft would count itself as
+  evidence for its own trade-resolved board, which is circular.
   """
-  @spec drafts_corpus(%{integer => String.t()}) :: [map]
-  def drafts_corpus(user_id_to_manager \\ %{}) do
+  @spec drafts_corpus(%{integer => String.t()}, keyword) :: [map]
+  def drafts_corpus(user_id_to_manager \\ %{}, opts \\ []) do
+    exclude_draft_id = Keyword.get(opts, :exclude_draft_id)
+
     teams_by_draft =
-      from(d in ObservedDraft, select: {d.id, d.teams})
+      from(d in ObservedDraft, where: d.status == "complete", select: {d.id, d.teams})
       |> Repo.all()
       |> Map.new()
 
     picks_by_draft =
-      from(p in ObservedPick, order_by: [asc: p.draft_id, asc: p.pick_no])
+      from(p in ObservedPick,
+        where: p.draft_id in ^Map.keys(teams_by_draft),
+        order_by: [asc: p.draft_id, asc: p.pick_no]
+      )
       |> Repo.all()
       |> Enum.group_by(& &1.draft_id)
 
-    for {draft_id, picks} <- picks_by_draft, picks != [] do
+    for {draft_id, picks} <- picks_by_draft, picks != [], draft_id != exclude_draft_id do
       teams = Map.fetch!(teams_by_draft, draft_id)
 
       shaped_picks =
@@ -373,4 +401,291 @@ defmodule SleeperPlayerApi.Intel do
     |> Repo.all()
     |> Map.new()
   end
+
+  # ---------------------------------------------------------------------
+  # `/availability` adapter (plan §3e / §3f step 4)
+  # ---------------------------------------------------------------------
+
+  @doc """
+  A single stored draft, or `nil` if it's never been crawled at all.
+  """
+  @spec get_observed_draft(integer | String.t()) :: ObservedDraft.t() | nil
+  def get_observed_draft(draft_id), do: Repo.get(ObservedDraft, to_int(draft_id))
+
+  @doc """
+  Every stored pick of one draft, ascending by `pick_no` — "what's already
+  been made", the input to resolving `currentPick` and excluding drafted
+  players from `targets`.
+  """
+  @spec draft_picks(integer) :: [%{pick_no: integer, player_id: String.t() | nil}]
+  def draft_picks(draft_id) do
+    from(p in ObservedPick,
+      where: p.draft_id == ^draft_id,
+      order_by: [asc: p.pick_no],
+      select: %{pick_no: p.pick_no, player_id: p.player_id}
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  One draft's traded-pick ledger as `%{{round, original_roster_id} =>
+  new_roster_id}` — exactly the shape
+  `SleeperPlayerApi.Intel.PickOwnership.resolve_roster/5` expects.
+  """
+  @spec draft_traded_picks(integer) :: %{{integer, integer} => integer}
+  def draft_traded_picks(draft_id) do
+    from(t in ObservedTradedPick, where: t.draft_id == ^draft_id)
+    |> Repo.all()
+    |> Map.new(fn t -> {{t.round, t.roster_id}, t.owner_id} end)
+  end
+
+  @doc """
+  `%{sleeper_user_id => display_name}` for every stored leaguemate — the
+  `user_id_to_manager` input `drafts_corpus/2` and
+  `SleeperPlayerApi.Intel.Availability` both take.
+  """
+  @spec manager_names_by_id() :: %{integer => String.t()}
+  def manager_names_by_id do
+    from(u in SleeperUser, select: {u.id, u.display_name})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
+  Live `roster_id -> owner sleeper_user_id` for a league, via `GET
+  /league/:id/rosters`. Deliberately not stored: plan §3a has no table for
+  it, roster ownership only matters for resolving *this request's*
+  trade-resolved board, and it changes rarely enough that a live fetch (one
+  call) is simpler than adding a table plus a staleness story for it. A
+  roster with no `owner_id` (an empty/orphaned roster) is dropped rather
+  than crashing the map build.
+  """
+  @spec fetch_roster_owners(integer | String.t()) :: {:ok, %{integer => integer}} | {:error, term}
+  def fetch_roster_owners(league_id) do
+    case Sleeper.get("/league/#{league_id}/rosters") do
+      {:ok, rosters} ->
+        owners =
+          rosters
+          |> Enum.filter(& &1["owner_id"])
+          |> Map.new(fn r -> {r["roster_id"], to_int(r["owner_id"])} end)
+
+        {:ok, owners}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  `%{player_id => %{name, position}}` for a set of Sleeper player ids,
+  joined from the `players` table (populated by the nightly
+  `GetSleeperPlayerData` job, per plan §3f step 4 "should come from the
+  existing players table — join, don't re-fetch"). A player id with no
+  matching row is simply absent from the result; callers treat that as
+  `name: nil, position: nil`.
+  """
+  @spec player_lookup([String.t()]) :: %{
+          String.t() => %{name: String.t() | nil, position: String.t() | nil}
+        }
+  def player_lookup(player_ids) do
+    from(p in SleeperPlayerApi.Sleeper.Player,
+      left_join: pos in SleeperPlayerApi.Sleeper.Position,
+      on: pos.id == p.position_id,
+      where: p.player_id in ^player_ids,
+      select: {p.player_id, %{name: p.full_name, position: pos.abbreviation}}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @fantasy_positions ~w(QB RB WR TE)
+
+  @doc """
+  Which of `player_ids` play a standard fantasy-relevant position
+  (#{inspect(@fantasy_positions)}), per the `players` table.
+
+  Feeds `SleeperPlayerApi.Intel.Availability`'s `eligible_ids` — a corpus
+  rookie draft's pick pool isn't exclusively skill positions (IDP/deep
+  bench flyers get picked too), and without this filter a thin-sample
+  non-fantasy player can out-rank every real target purely on raw ADP (see
+  the report on this step for the concrete example this was found against).
+  """
+  @spec fantasy_position_ids([String.t()]) :: MapSet.t(String.t())
+  def fantasy_position_ids(player_ids) do
+    from(p in SleeperPlayerApi.Sleeper.Player,
+      join: pos in SleeperPlayerApi.Sleeper.Position,
+      on: pos.id == p.position_id,
+      where: p.player_id in ^player_ids and pos.abbreviation in ^@fantasy_positions,
+      select: p.player_id
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
+  Every stored pick of a `"complete"` draft for any of `player_ids`,
+  formatted `"round.slot@overall"` (plan §4e "store every individual
+  pick... so the UI can show receipts") and grouped by `{manager,
+  player_id}`, ascending by `pick_no` within each group.
+
+  A second, small query rather than folding into `drafts_corpus/2`: the
+  estimator-shaped corpus deliberately carries only the normalized pick
+  (`Estimator` doesn't need `round`/`draft_slot`/`pick_no`), so this is the
+  one place that reads them back out for display.
+  """
+  @spec manager_pick_strings([String.t()], %{integer => String.t()}) :: %{
+          {String.t(), String.t()} => [String.t()]
+        }
+  def manager_pick_strings(player_ids, user_id_to_manager) do
+    from(p in ObservedPick,
+      join: d in ObservedDraft,
+      on: d.id == p.draft_id,
+      where: d.status == "complete" and p.player_id in ^player_ids and not is_nil(p.picked_by),
+      order_by: [asc: p.pick_no],
+      select: %{
+        player_id: p.player_id,
+        picked_by: p.picked_by,
+        round: p.round,
+        draft_slot: p.draft_slot,
+        pick_no: p.pick_no
+      }
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn row, acc ->
+      case Map.get(user_id_to_manager, row.picked_by) do
+        nil ->
+          acc
+
+        manager ->
+          formatted = "#{row.round}.#{row.draft_slot}@#{row.pick_no}"
+          Map.update(acc, {manager, row.player_id}, [formatted], &(&1 ++ [formatted]))
+      end
+    end)
+  end
+
+  @doc """
+  The `/availability` endpoint's context entry point (plan §3f step 4).
+  Trade-resolves `draft_id`'s remaining picks and, for every corpus player
+  still on the board, its Kaplan-Meier survival curve conditioned on that
+  board — see `SleeperPlayerApi.Intel.Availability` for the response shape
+  and `SleeperPlayerApi.Intel.PickOwnership` for the resolution itself.
+
+  `opts`:
+
+    * `:user_id` (required) — whose remaining picks are "mine"
+    * `:at_pick` — analyze as if the draft were currently at this pick
+      instead of its actual next open one (plan §3g hypotheticals).
+      Defaults to the draft's actual next pick.
+    * `:limit` — how many corpus players become `targets` (default 20)
+
+  Refreshes the draft's own picks/traded_picks first when it isn't stored
+  yet or its stored status is `"drafting"`, via
+  `SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts.refresh_draft/1` — reusing
+  the crawler's own fetch path rather than a second one, per the plan's
+  scope note. A `"complete"` draft is immutable and is never refetched. If
+  a refresh attempt fails but the draft was already stored, the stale
+  stored copy is used rather than failing the whole request.
+
+  Returns `{:ok, response}`, `{:error, :draft_not_found}` if `draft_id`
+  isn't stored and can't be fetched from Sleeper either, or `{:error,
+  reason}` from `Availability.build/1` (an unresolvable draft type — see
+  its moduledoc on why that's a hard failure rather than a degraded
+  response).
+  """
+  @spec availability(integer | String.t(), keyword) :: {:ok, map} | {:error, term}
+  def availability(draft_id, opts \\ []) do
+    draft_id = to_int(draft_id)
+    my_user_id = opts |> Keyword.fetch!(:user_id) |> to_int()
+    at_pick = opts[:at_pick]
+    limit = Keyword.get(opts, :limit, 20)
+
+    with :ok <- ensure_fresh(draft_id) do
+      case get_observed_draft(draft_id) do
+        nil -> {:error, :draft_not_found}
+        draft -> build_availability(draft, my_user_id, at_pick, limit)
+      end
+    end
+  end
+
+  defp ensure_fresh(draft_id) do
+    case get_observed_draft(draft_id) do
+      nil -> refresh(draft_id)
+      %ObservedDraft{status: "drafting"} -> refresh(draft_id)
+      %ObservedDraft{} -> :ok
+    end
+  end
+
+  defp refresh(draft_id) do
+    case SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts.refresh_draft(draft_id) do
+      {:ok, _summary} -> :ok
+      {:error, reason} -> if get_observed_draft(draft_id), do: :ok, else: {:error, reason}
+    end
+  end
+
+  defp build_availability(draft, my_user_id, at_pick, limit) do
+    picks_made = draft_picks(draft.id)
+    traded_picks = draft_traded_picks(draft.id)
+    slot_to_roster_id = normalize_slot_map(draft.slot_to_roster_id)
+
+    with {:ok, roster_to_user} <- fetch_roster_owners(draft.league_id) do
+      user_id_to_manager = manager_names_by_id()
+      corpus = drafts_corpus(user_id_to_manager, exclude_draft_id: draft.id)
+
+      already_picked =
+        picks_made |> Enum.map(& &1.player_id) |> Enum.reject(&is_nil/1) |> MapSet.new()
+
+      candidate_ids =
+        for d <- corpus, p <- d.picks, not MapSet.member?(already_picked, p.player_id) do
+          p.player_id
+        end
+        |> Enum.uniq()
+
+      Availability.build(%{
+        league_name: draft.league_name,
+        draft_id: draft.id,
+        teams: draft.teams,
+        rounds: draft.rounds,
+        draft_type: draft.draft_type,
+        slot_to_roster_id: slot_to_roster_id,
+        picks_made: picks_made,
+        traded_picks: traded_picks,
+        roster_to_user: roster_to_user,
+        user_id_to_manager: user_id_to_manager,
+        my_user_id: my_user_id,
+        at_pick: at_pick,
+        limit: limit,
+        corpus: corpus,
+        candidate_lookup: player_lookup(candidate_ids),
+        market_rank: Estimator.rookie_class_rank(market_rookie_class_entries()),
+        raw_picks: manager_pick_strings(candidate_ids, user_id_to_manager),
+        eligible_ids: fantasy_position_ids(candidate_ids)
+      })
+    end
+  end
+
+  # `player_values` (plan §2/§3a) is refreshed from FantasyCalc by plan §3f
+  # step 5, which this endpoint step deliberately doesn't build (scope
+  # note: "NOT /intel — that's step 5"). Until that refresh job runs, this
+  # is always empty, so `marketPick`/`adpGap` come back `nil` for every
+  # target — an honest "no market read yet", not a fabricated one.
+  # `maybeDraftInfo.year` (the rookie-class filter, estimator §8) isn't a
+  # `player_values` column either; extending that schema is step 5's job.
+  defp market_rookie_class_entries do
+    from(pv in PlayerValue,
+      where: pv.source == "fantasycalc",
+      select: {pv.player_id, pv.value}
+    )
+    |> Repo.all()
+    |> Enum.map(fn {player_id, value} -> {to_string(player_id), value} end)
+  end
+
+  defp normalize_slot_map(nil), do: %{}
+
+  defp normalize_slot_map(slot_to_roster_id) do
+    Map.new(slot_to_roster_id, fn {slot, roster_id} -> {to_int(slot), to_int(roster_id)} end)
+  end
+
+  defp to_int(nil), do: nil
+  defp to_int(i) when is_integer(i), do: i
+  defp to_int(s) when is_binary(s), do: String.to_integer(s)
 end
