@@ -495,4 +495,45 @@ defmodule SleeperPlayerApi.Intel.EstimatorTest do
       assert_in_delta adj_survival, 0.589, @tolerance
     end
   end
+
+  describe "base_hazard clamping" do
+    # A hazard is a probability, but `d(n) / r(n)` is not bounded by one: the
+    # numerator is smeared across neighbouring picks while the risk set is
+    # decremented hard at the unsmeared pick. Where a player is near-unanimous
+    # the risk set collapses faster than the density does.
+    #
+    # Found by running the calibration harness over the real corpus, not by a
+    # test: the consensus 1.01 came out with h = 2.824 at pick 2, so `1 - h`
+    # was negative and the survival product went to -0.488 — a negative
+    # percentage, at the top of a live draft board.
+    test "never exceeds 1.0, even where the density outruns the risk set" do
+      # Nineteen drafts take him immediately; one lets him fall. At pick 2 the
+      # risk set is that single draft, while the smeared mass of twenty events
+      # centred on 1.0 is still substantial.
+      drafts =
+        List.duplicate(%{l_d: 12.0, picks: [%{norm: 1.0, player_id: "X", manager: nil}]}, 19) ++
+          [%{l_d: 12.0, picks: [%{norm: 9.0, player_id: "X", manager: nil}]}]
+
+      hazard = Estimator.base_hazard(drafts, "X")
+
+      for {pick, h} <- hazard do
+        assert h <= 1.0, "hazard #{h} at pick #{pick} is not a probability"
+        assert h >= 0.0, "hazard #{h} at pick #{pick} is not a probability"
+      end
+    end
+
+    test "so survival stays a probability rather than going negative" do
+      drafts =
+        List.duplicate(%{l_d: 12.0, picks: [%{norm: 1.0, player_id: "X", manager: nil}]}, 19) ++
+          [%{l_d: 12.0, picks: [%{norm: 9.0, player_id: "X", manager: nil}]}]
+
+      hazard = Estimator.base_hazard(drafts, "X")
+
+      for from <- 1..11, to <- (from + 1)..12 do
+        s = Estimator.base_survival(hazard, from, to)
+        assert s >= 0.0, "survival #{s} from #{from} to #{to} is negative"
+        assert s <= 1.0, "survival #{s} from #{from} to #{to} exceeds 1"
+      end
+    end
+  end
 end
