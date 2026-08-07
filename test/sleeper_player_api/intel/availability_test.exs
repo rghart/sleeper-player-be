@@ -141,7 +141,8 @@ defmodule SleeperPlayerApi.Intel.AvailabilityTest do
              "expected only the current pick's column, got #{inspect(Map.keys(target.by_pick))}"
 
       assert target.by_pick[9].base_survival == 1.0
-      assert target.by_pick[9].threats == []
+      # No picks left, so nothing can take him: no hazard entries either.
+      assert target.hazards == []
     end
   end
 
@@ -198,7 +199,25 @@ defmodule SleeperPlayerApi.Intel.AvailabilityTest do
       keys = target.by_pick |> Map.keys() |> Enum.sort()
       # current_pick 1 .. last_pick 8, +1 for the extra survival-after column
       assert keys == Enum.to_list(1..9)
-      assert target.by_pick[1] == %{adj_survival: 1.0, base_survival: 1.0, threats: []}
+      assert target.by_pick[1] == %{adj_survival: 1.0, base_survival: 1.0}
+    end
+
+    # The shape change that made the response 22x smaller: one hazard entry
+    # per pick, instead of a threat list per target pick that re-sent the
+    # same prefix every time. See `Estimator.hazards/6`.
+    test "hazards carry one entry per pick, stopping at last_pick", %{corpus: corpus} do
+      input = base_input(%{corpus: corpus, limit: 1})
+
+      assert {:ok, response} = Availability.build(input)
+      target = hd(response.targets)
+
+      # by_pick runs to 9 so the gauntlet can read "survival after pick 8",
+      # but no threat can sit at a pick that does not exist.
+      assert Enum.map(target.hazards, & &1.pick) == Enum.to_list(1..8)
+      assert Enum.all?(target.hazards, &is_float(&1.prob))
+
+      refute Enum.any?(target.hazards, &Map.has_key?(&1, :manager)),
+             "manager belongs to the board entry, not to every hazard on every pick"
     end
   end
 end

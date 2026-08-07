@@ -480,9 +480,48 @@ defmodule SleeperPlayerApi.Intel.Estimator do
   # ---------------------------------------------------------------------
 
   @doc """
+  One entry per pick in `[first_pick, last_pick]` whose owner (per `board`,
+  a `%{pick_number => manager}` map) is a known leaguemate: the probability
+  that owner takes this player there, given he is still available.
+
+  This is what `threats/8` builds its lists *out of*, and it is the thing
+  worth sending over the wire. A threat list for target pick `n` is every
+  entry here with `pick < n`, so serving one list per target pick means
+  re-sending the same prefix `n` times — measured against production, that
+  was 11,760 threat objects and 837KB for ten players at pick 1, where the
+  irreducible content is 38KB. The other two fields `threats/8` carries
+  (`drafts` and `tookCount`) do not vary by pick either: the first belongs
+  to the board entry and the second to `per_manager`, so a caller can
+  rebuild the full list by joining on the pick number.
+
+  Picks owned by someone outside `known_managers` are excluded, exactly as
+  in `threats/8` — they still affect survival through `mult_fun`, they just
+  produce no itemized receipt.
+  """
+  @spec hazards(
+          %{integer => float},
+          integer,
+          integer,
+          %{integer => String.t()},
+          MapSet.t(String.t()),
+          (String.t() -> float)
+        ) :: [map]
+  def hazards(hazard, first_pick, last_pick, board, known_managers, mult_fun) do
+    for k <- first_pick..last_pick//1,
+        manager = Map.get(board, k),
+        manager != nil,
+        MapSet.member?(known_managers, manager) do
+      %{pick: k, prob: Map.get(hazard, k, 0.0) * mult_fun.(manager)}
+    end
+  end
+
+  @doc """
   The threat list for target pick `target_pick`: every pick `k` in
   `[current_pick, target_pick)` whose owner (per `board`, a `%{pick_number
   => manager}` map) is a known leaguemate, in pick order.
+
+  Retained for tests and for `hazards/6`'s own equivalence check; the API
+  serves `hazards/6` instead. See its docstring for why.
 
   `hazard` is the base hazard curve (see `base_hazard/3`). `known_managers`
   is used to decide whether a board owner is a tracked leaguemate at all —

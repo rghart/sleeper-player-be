@@ -49,6 +49,7 @@ defmodule SleeperPlayerApiWeb.AvailabilityJSON do
       min: t.min,
       max: t.max,
       byPick: by_pick(t.by_pick),
+      hazards: Enum.map(t.hazards, &hazard/1),
       perManager: Enum.map(t.per_manager, &per_manager/1),
       marketPick: t.market_pick,
       adpGap: t.adp_gap,
@@ -59,17 +60,15 @@ defmodule SleeperPlayerApiWeb.AvailabilityJSON do
   defp by_pick(by_pick) do
     Map.new(by_pick, fn {pick, entry} ->
       {Integer.to_string(pick),
-       %{
-         adjSurvival: entry.adj_survival,
-         baseSurvival: entry.base_survival,
-         threats: Enum.map(entry.threats, &threat/1)
-       }}
+       %{adjSurvival: entry.adj_survival, baseSurvival: entry.base_survival}}
     end)
   end
 
-  defp threat(t) do
-    %{manager: t.manager, pick: t.pick, prob: t.prob, drafts: t.drafts, tookCount: t.tookCount}
-  end
+  # One entry per pick, not a threat list per target pick. The threat list
+  # for pick `n` is every entry with `pick < n`, joined to `board` for the
+  # manager and their drafts-seen and to `perManager` for the take count -
+  # none of which vary by target pick. See `Estimator.hazards/6`.
+  defp hazard(h), do: %{pick: h.pick, prob: h.prob}
 
   defp per_manager(m) do
     %{manager: m.manager, times: m.times, of: m.of, adp: m.adp, picks: m.picks}

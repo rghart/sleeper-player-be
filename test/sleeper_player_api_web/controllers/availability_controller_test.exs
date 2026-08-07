@@ -82,6 +82,14 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       assert pick39["mine"] == true
     end
 
+    # The fixture is the frozen ground truth from the live District 13 draft
+    # and it still carries the *old* per-pick threat lists. That is
+    # deliberate: the response shape got 22x smaller by not sending those,
+    # but the numbers behind them did not change, so this test rebuilds the
+    # threat list the way the frontend now does - hazards joined to `board`
+    # and `perManager` on the pick number - and asserts the reconstruction
+    # against the untouched fixture. If the join is wrong, or a hazard goes
+    # missing, this fails; and the ground truth stays ground truth.
     test "byPick numbers match the fixture within 0.0005 — proves the whole stack", %{conn: conn} do
       fixture = read_json!("fixture.json")
 
@@ -94,13 +102,34 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       body = json_response(conn, 200)
 
       targets_by_id = Map.new(body["targets"], &{&1["id"], &1})
+      board_by_pick = Map.new(body["board"], &{&1["pick"], &1})
 
       deviations =
         Enum.flat_map(fixture["targets"], fn expected_target ->
           actual_target = Map.fetch!(targets_by_id, expected_target["id"])
+          took_by_manager = Map.new(actual_target["perManager"], &{&1["manager"], &1["times"]})
 
           Enum.map(expected_target["byPick"], fn {pick_str, expected} ->
             actual = Map.fetch!(actual_target["byPick"], pick_str)
+
+            # The reconstruction the frontend performs, done here against the
+            # fixture's own expectations.
+            rebuilt_threats =
+              actual_target["hazards"]
+              |> Enum.filter(&(&1["pick"] < String.to_integer(pick_str)))
+              |> Enum.map(fn h ->
+                board = Map.fetch!(board_by_pick, h["pick"])
+
+                %{
+                  "manager" => board["manager"],
+                  "pick" => h["pick"],
+                  "prob" => h["prob"],
+                  "drafts" => board["drafts"],
+                  "tookCount" => Map.get(took_by_manager, board["manager"], 0)
+                }
+              end)
+
+            actual = Map.put(actual, "threats", rebuilt_threats)
 
             assert_in_delta actual["baseSurvival"],
                             expected["baseSurvival"],
