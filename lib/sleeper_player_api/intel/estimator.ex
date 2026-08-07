@@ -348,7 +348,20 @@ defmodule SleeperPlayerApi.Intel.Estimator do
     risk = risk_curve(drafts, player_id, grid)
 
     for {n, r} <- risk, into: %{} do
-      h = if r == 0, do: 0.0, else: Map.fetch!(density, n) / r
+      # Clamped to 1.0 because a hazard is a probability and `d(n) / r(n)` is
+      # not bounded by one: the numerator is smeared across neighbouring picks
+      # while the risk set is decremented hard at the unsmeared pick (the
+      # deliberate asymmetry documented in §4 above). Where a player is near-
+      # unanimous the risk set collapses faster than the density does, and the
+      # ratio can exceed 1 — which makes `1 - h` negative, and the survival
+      # product negative with it.
+      #
+      # Found by measurement, not by a test: exactly one (player, pick) pair in
+      # the 70-draft corpus does this — the consensus 1.01 (ADP 1.1, sd 0.3) at
+      # pick 2, where h came out 2.824 and survival across that pick came out
+      # -0.488. It is narrow but it is reachable: it is the top of a live draft
+      # board, and it renders as a negative percentage.
+      h = if r == 0, do: 0.0, else: min(1.0, Map.fetch!(density, n) / r)
       {n, h}
     end
   end
