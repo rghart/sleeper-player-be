@@ -208,31 +208,33 @@ defmodule SleeperPlayerApi.Intel.Availability do
 
     board_mult_fun = fn pick -> mult_fun.(Map.get(board_owner, pick)) end
 
+    # Survival stays server-side for both figures. It is tempting to send
+    # only `hazards` and let the client derive survival from it, which is
+    # smaller again - but §3g's whole point is that one estimator serves the
+    # headline and the stations so the gauntlet telescopes exactly to the
+    # chip. Deriving it a second time on the client is precisely the second,
+    # inconsistent computation that fixed.
+    #
     # `//1` for the same reason as the board range above.
     by_pick =
       for pick <- current_pick..(last_pick + 1)//1, into: %{} do
-        base_survival = Estimator.base_survival(hazard, current_pick, pick)
-        adj_survival = Estimator.adjusted_survival(hazard, current_pick, pick, board_mult_fun)
-
-        threats =
-          Estimator.threats(
-            hazard,
-            current_pick,
-            pick,
-            board_owner,
-            known_managers,
-            mult_fun,
-            fn manager -> Estimator.manager_seen(input.corpus, manager) end,
-            fn manager -> Estimator.manager_took(input.corpus, manager, player_id) end
-          )
-
         {pick,
          %{
-           adj_survival: round3(adj_survival),
-           base_survival: round3(base_survival),
-           threats: Enum.map(threats, &round_threat/1)
+           adj_survival:
+             round3(Estimator.adjusted_survival(hazard, current_pick, pick, board_mult_fun)),
+           base_survival: round3(Estimator.base_survival(hazard, current_pick, pick))
          }}
       end
+
+    # One entry per pick rather than a threat list per target pick - see
+    # `Estimator.hazards/6` on why the latter was 22x larger than its own
+    # content. The top of the range is `last_pick`, not `last_pick + 1`:
+    # by_pick runs one past the end so the gauntlet can read "survival after
+    # this pick", but no threat ever sits at that extra pick.
+    hazards =
+      hazard
+      |> Estimator.hazards(current_pick, last_pick, board_owner, known_managers, mult_fun)
+      |> Enum.map(fn h -> %{h | prob: round3(h.prob)} end)
 
     market_pick = Map.get(input.market_rank, player_id)
     adp_gap = Estimator.adp_gap(summary.adp, market_pick)
@@ -249,14 +251,13 @@ defmodule SleeperPlayerApi.Intel.Availability do
       min: round1(summary.min),
       max: round1(summary.max),
       by_pick: by_pick,
+      hazards: hazards,
       per_manager: per_manager(input, player_id),
       market_pick: market_pick,
       adp_gap: adp_gap,
       notable: notable(input, player_id, board_owner, summary.adp)
     }
   end
-
-  defp round_threat(threat), do: %{threat | prob: round3(threat.prob)}
 
   defp round3(nil), do: nil
   defp round3(x), do: Float.round(x * 1.0, 3)
