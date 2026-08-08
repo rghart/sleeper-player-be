@@ -22,6 +22,7 @@ defmodule SleeperPlayerApi.Intel.ObservedLeague do
     # %{"roster_id" => user_id}. String keys because it round-trips as jsonb.
     field :roster_to_user, :map
     field :rosters_fetched_at, :utc_datetime
+    field :transactions_fetched_through, :integer
 
     timestamps()
   end
@@ -29,7 +30,14 @@ defmodule SleeperPlayerApi.Intel.ObservedLeague do
   @doc false
   def changeset(observed_league, attrs) do
     observed_league
-    |> cast(attrs, [:id, :name, :season, :roster_to_user, :rosters_fetched_at])
+    |> cast(attrs, [
+      :id,
+      :name,
+      :season,
+      :roster_to_user,
+      :rosters_fetched_at,
+      :transactions_fetched_through
+    ])
     |> validate_required([:id])
   end
 end

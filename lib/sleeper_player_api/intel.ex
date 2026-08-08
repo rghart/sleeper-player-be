@@ -260,7 +260,12 @@ defmodule SleeperPlayerApi.Intel do
               season: fragment("COALESCE(EXCLUDED.season, ?)", l.season),
               roster_to_user: fragment("COALESCE(EXCLUDED.roster_to_user, ?)", l.roster_to_user),
               rosters_fetched_at:
-                fragment("COALESCE(EXCLUDED.rosters_fetched_at, ?)", l.rosters_fetched_at)
+                fragment("COALESCE(EXCLUDED.rosters_fetched_at, ?)", l.rosters_fetched_at),
+              transactions_fetched_through:
+                fragment(
+                  "GREATEST(COALESCE(EXCLUDED.transactions_fetched_through, 0), COALESCE(?, 0))",
+                  l.transactions_fetched_through
+                )
             ]
           ]
         )
