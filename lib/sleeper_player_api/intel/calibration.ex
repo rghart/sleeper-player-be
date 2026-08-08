@@ -48,6 +48,12 @@ defmodule SleeperPlayerApi.Intel.Calibration do
   Lower is better. A perfectly calibrated estimator scores 0.0 — which says
   nothing about whether it is *sharp*, only that it is honest. Two estimators
   are only comparable through the same `ks`/`deltas`/bucket settings.
+
+  So each summary also carries a **Brier score**: the mean squared error of
+  the probability against the outcome, which is what separates two models that
+  both calibrate well. "70% about everything, right 70% of the time" scores a
+  perfect calibration error and a poor Brier. Read both — honest *and*
+  decisive is the goal, and `error` alone cannot see the second.
   """
 
   @default_deltas 1..14
@@ -243,7 +249,7 @@ defmodule SleeperPlayerApi.Intel.Calibration do
     end
   end
 
-  defp summarize([]), do: %{error: 0.0, n: 0, buckets: []}
+  defp summarize([]), do: %{error: 0.0, brier: 0.0, n: 0, buckets: []}
 
   defp summarize(observations) do
     total = length(observations)
@@ -268,7 +274,18 @@ defmodule SleeperPlayerApi.Intel.Calibration do
 
     error = Enum.reduce(buckets, 0.0, fn b, acc -> acc + b.n / total * b.gap end)
 
-    %{error: error, n: total, buckets: buckets}
+    # Brier: mean squared error of the probability against the outcome. It
+    # measures something calibration cannot — *sharpness*. A model that says
+    # "70%" about everything and is right 70% of the time is perfectly
+    # calibrated (error 0.0) and useless; its Brier score exposes that. Two
+    # models that both calibrate well are separated by this, not by `error`.
+    brier =
+      Enum.reduce(observations, 0.0, fn o, acc ->
+        diff = o.predicted - if(o.actual, do: 1.0, else: 0.0)
+        acc + diff * diff
+      end) / total
+
+    %{error: error, brier: brier, n: total, buckets: buckets}
   end
 
   # 1.0 belongs in the top bucket rather than a tenth one of its own.

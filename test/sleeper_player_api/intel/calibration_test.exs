@@ -235,6 +235,38 @@ defmodule SleeperPlayerApi.Intel.CalibrationTest do
     end
   end
 
+  describe "the Brier score" do
+    # Calibration cannot see sharpness; this is what does. Both are reported
+    # because a model can be honest and useless.
+    test "is 0.0 for a confident predictor that is always right" do
+      drafts = [draft(12.0, [{9.0, "A"}]), draft(12.0, [{9.0, "A"}])]
+
+      result = run_all(drafts, always(1.0), deltas: [1], ks: [1], players: ["A"])
+
+      assert result.brier == 0.0
+    end
+
+    test "is 1.0 for a confident predictor that is always wrong" do
+      drafts = [draft(12.0, [{2.0, "A"}]), draft(12.0, [{2.0, "A"}])]
+
+      result = run_all(drafts, always(1.0), deltas: [2], ks: [1], players: ["A"])
+
+      assert result.brier == 1.0
+    end
+
+    test "punishes a hedge that calibration is perfectly happy with" do
+      # Half survive, half do not, and the model says 50% every time. That is
+      # flawless calibration and no information at all — exactly the case
+      # `error` alone cannot distinguish from a good model.
+      drafts = [draft(12.0, [{2.0, "A"}]), draft(12.0, [{9.0, "A"}])]
+
+      result = run_all(drafts, always(0.5), deltas: [4], ks: [1], players: ["A"])
+
+      assert result.error == 0.0
+      assert result.brier == 0.25
+    end
+  end
+
   test "an empty corpus is 0 observations rather than a crash" do
     assert %{all: %{n: 0, error: 0.0}, contested: %{n: 0}} = Calibration.run([], always(0.5))
   end
