@@ -19,12 +19,12 @@ defmodule SleeperPlayerApi.Intel.CalibrationTest do
 
   # A predictor that always says the same thing, so the observed side is the
   # only thing under test.
-  defp always(p), do: fn _training, _board -> fn _player, _from, _to -> p end end
+  defp always(p), do: fn _training, _board -> fn _player, _from, _to, _gone -> p end end
 
   # Most cases here are about the scoring rules, which apply to both
   # populations; they read the unfiltered one. The `contested` split has its
   # own describe block below.
-  defp run_all(drafts, builder, opts \\ []), do: Calibration.run(drafts, builder, opts).all
+  defp run_all(drafts, builder, opts), do: Calibration.run(drafts, builder, opts).all
 
   describe "censoring — the bug that hid inside the old harness" do
     test "a draft that ended before the target pick is not scored at all" do
@@ -120,7 +120,7 @@ defmodule SleeperPlayerApi.Intel.CalibrationTest do
           drafts,
           fn training, _board ->
             # Record how big the training set was, as the "probability".
-            fn _player, _from, _to -> length(training) / 10 end
+            fn _player, _from, _to, _gone -> length(training) / 10 end
           end,
           deltas: [1],
           ks: [1],
@@ -150,7 +150,7 @@ defmodule SleeperPlayerApi.Intel.CalibrationTest do
       result =
         run_all(
           drafts,
-          fn _, _ -> fn _player, from, _to -> if from == 1, do: 1.0, else: 0.0 end end,
+          fn _, _ -> fn _player, from, _to, _gone -> if from == 1, do: 1.0, else: 0.0 end end,
           deltas: [1],
           ks: [1, 2, 3],
           players: ["A"]

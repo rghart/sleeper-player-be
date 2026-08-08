@@ -29,7 +29,7 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
     fn training, _board ->
       cache = :ets.new(:hazards, [:set, :private])
 
-      fn player_id, from, to ->
+      fn player_id, from, to, _gone ->
         hazard =
           case :ets.lookup(cache, player_id) do
             [{^player_id, cached}] ->
@@ -50,7 +50,7 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
   defp manager_conditioned do
     fn training, board ->
       fitted = ManagerModel.fit(training, board: board)
-      fn player_id, from, to -> ManagerModel.survival(fitted, player_id, from, to) end
+      fn player_id, from, to, gone -> ManagerModel.survival(fitted, player_id, from, to, gone) end
     end
   end
 

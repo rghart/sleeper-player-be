@@ -25,17 +25,38 @@ defmodule SleeperPlayerApi.Intel.ManagerModel do
     two-draft sample cannot dominate: `1 + λ_m * (rate_m(X) - base(X))` with
     `λ_m = n_m / (n_m + k)`.
 
-  ## Why this might not beat the incumbent
+  ## MEASURED: it does not beat the incumbent, and the reason is structural
 
-  Worth stating up front, because it shapes how the result should be read. The
-  shipping estimator already conditions on managers through the multiplier in
-  `Estimator.multiplier/3`, and §3g found that weighting *down* (`n/(n+12)`)
-  improved both the D13 error and the held-out Brier score — because for
-  managers with 1–3 observed drafts the signal is noise. This model
-  conditions harder on the same thin samples. The corpus has 70 drafts across
-  13 managers, and the median manager appears in a handful; there may simply
-  not be enough per-manager data for a per-manager model to beat a
-  well-shrunk league curve.
+  Scored by `Intel.Calibration` over the 70-draft corpus, identical settings,
+  both populations:
+
+  | population | shipping | this model |
+  | --- | --- | --- |
+  | all | **0.0017** | 0.0378 |
+  | contested | **0.0091** | 0.2120 |
+
+  23x worse where it counts. That is not a near miss, and it is not thin data
+  or a truncated fit: β is a genuine interior maximum at 6.0 (log-likelihood
+  -6770.8 / **-6629.2** / -6882.9 at β = 4 / 6 / 8), and the depleting-pool
+  bug that made it look even worse (0.2855) is fixed.
+
+  **The model has no time dimension.** It conditions on *who* picks, never on
+  *when*. A conditional logit over static values says "at any pick, this
+  manager chooses from the pool by value", so a given player's hazard is
+  nearly flat across the whole draft — it moves only as the pool depletes.
+  Measured on a real mid-board player (observed ADP 20.7), it returns 0.002
+  at pick 5, 0.002 at 22, and 0.002 at 45. The empirical kernel hazard it is
+  competing against puts 0.01 at pick 22 and ~0 everywhere else, because
+  *when* a player goes is the entire question.
+
+  Conditioning on the manager cannot recover that: it rescales a curve that
+  has the wrong shape in time. The incumbent's shrunk multiplier applies
+  manager information *to* an empirical time curve, which is why it wins.
+
+  A version worth trying would keep the empirical hazard's shape and let the
+  choice model redistribute it among available players at each pick — but
+  that is a different model from the one §4d specifies, and it should be
+  measured before it is written, not after.
   """
 
   alias SleeperPlayerApi.Intel.Estimator
@@ -138,10 +159,10 @@ defmodule SleeperPlayerApi.Intel.ManagerModel do
   Returns `1.0` when `to <= from` (empty product), matching
   `Estimator.base_survival/3`.
   """
-  @spec survival(map, String.t(), number, number) :: float
-  def survival(fitted, player_id, from, to) do
+  @spec survival(map, String.t(), number, number, MapSet.t()) :: float
+  def survival(fitted, player_id, from, to, gone \\ MapSet.new()) do
     Enum.reduce(trunc(from)..(trunc(to) - 1)//1, 1.0, fn k, acc ->
-      acc * (1 - hazard_at(fitted, player_id, k))
+      acc * (1 - hazard_at(fitted, player_id, k, gone))
     end)
   end
 
@@ -149,28 +170,43 @@ defmodule SleeperPlayerApi.Intel.ManagerModel do
   `h_m(X)` at one pick: the modelled chance the owner of pick `k` takes `X`,
   given `X` is available.
   """
-  @spec hazard_at(map, String.t(), integer) :: float
-  def hazard_at(fitted, player_id, k) do
+  @spec hazard_at(map, String.t(), integer, MapSet.t()) :: float
+  def hazard_at(fitted, player_id, k, gone \\ MapSet.new()) do
     manager = Map.get(fitted.board, k)
     v_x = Map.get(fitted.value, player_id, 0.0)
 
-    if v_x <= 0.0 do
+    if v_x <= 0.0 or MapSet.member?(gone, player_id) do
       0.0
     else
-      numerator = affinity_for(fitted, manager, player_id) * :math.pow(v_x, fitted.beta)
+      numerator = weight(fitted, manager, player_id)
 
+      # §4d is a conditional logit over *available* players, so the pool has
+      # to deplete. The first version summed over every corpus player at every
+      # pick, which diluted each share toward uniform and made the whole model
+      # badly miscalibrated (0.2855 contested, against 0.0091 for the
+      # incumbent). That was the implementation, not the model.
+      #
+      # Subtracting the gone players from a precomputed total rather than
+      # re-summing the pool: `gone` is at most a draft's worth of picks, the
+      # pool is every corpus player, and this runs once per (player, pick).
       denominator =
-        Enum.reduce(fitted.pool, 0.0, fn id, acc ->
-          v = Map.get(fitted.value, id, 0.0)
-
-          if v <= 0.0,
-            do: acc,
-            else: acc + affinity_for(fitted, manager, id) * :math.pow(v, fitted.beta)
+        Enum.reduce(gone, total_weight(fitted, manager), fn id, acc ->
+          acc - weight(fitted, manager, id)
         end)
 
       if denominator <= 0.0, do: 0.0, else: min(1.0, numerator / denominator)
     end
   end
+
+  defp weight(fitted, manager, player_id) do
+    case Map.get(fitted.value, player_id, 0.0) do
+      v when v <= 0.0 -> 0.0
+      v -> affinity_for(fitted, manager, player_id) * :math.pow(v, fitted.beta)
+    end
+  end
+
+  # Σ over the whole pool, cached per manager at fit time.
+  defp total_weight(fitted, manager), do: Map.get(fitted.totals, manager, fitted.totals[nil])
 
   defp affinity_for(_fitted, nil, _player_id), do: 1.0
 
@@ -194,16 +230,34 @@ defmodule SleeperPlayerApi.Intel.ManagerModel do
 
     managers = for(d <- drafts, p <- d.picks, p.manager != nil, do: p.manager) |> Enum.uniq()
 
+    beta = Keyword.get(opts, :beta) || fit_beta(drafts)
+    value = values(drafts, players)
+    base = Map.new(players, &{&1, Estimator.base_rate(drafts, &1) * 12})
+    seen = Map.new(managers, &{&1, Estimator.manager_seen(drafts, &1)})
+
+    took =
+      Map.new(managers, fn manager ->
+        {manager, Map.new(players, &{&1, Estimator.manager_took(drafts, manager, &1)})}
+      end)
+
+    partial = %{beta: beta, value: value, base: base, seen: seen, took: took}
+
+    # Σ over the whole pool, per manager, once. `nil` covers a pick whose
+    # owner is not a tracked leaguemate — affinity is 1.0 there, so it is the
+    # unweighted total.
+    totals =
+      Map.new([nil | managers], fn manager ->
+        {manager, Enum.reduce(players, 0.0, fn id, acc -> acc + weight(partial, manager, id) end)}
+      end)
+
     %{
-      beta: Keyword.get(opts, :beta) || fit_beta(drafts),
-      value: values(drafts, players),
+      beta: beta,
+      value: value,
       pool: players,
-      base: Map.new(players, &{&1, Estimator.base_rate(drafts, &1) * 12}),
-      seen: Map.new(managers, &{&1, Estimator.manager_seen(drafts, &1)}),
-      took:
-        Map.new(managers, fn manager ->
-          {manager, Map.new(players, &{&1, Estimator.manager_took(drafts, manager, &1)})}
-        end),
+      base: base,
+      seen: seen,
+      took: took,
+      totals: totals,
       board: Keyword.get(opts, :board, %{})
     }
   end

@@ -59,7 +59,9 @@ defmodule SleeperPlayerApi.Intel.Calibration do
   `predict_builder` is `(training_drafts, board -> predict_fun)`, where `board`
   is the held-out draft's `%{pick => manager}` (see `board_of/1`), and
   `predict_fun`
-  is `(player_id, from_pick, to_pick -> probability)`. Taking a builder rather
+  is `(player_id, from_pick, to_pick, gone -> probability)`, where `gone` is
+  the MapSet of players already off the board when `from_pick` starts.
+  Taking a builder rather
   than a bare function is what lets an estimator do its per-corpus fitting
   once per held-out draft instead of once per observation — with 70 drafts and
   ~130 players that is the difference between minutes and hours.
@@ -184,6 +186,16 @@ defmodule SleeperPlayerApi.Intel.Calibration do
     last = trunc(held_out.l_d)
     ks = Keyword.get(opts, :ks) || 1..last
 
+    # Who is already off the board when each pick starts. This is production
+    # knowledge — at pick k you can see everything taken before it — and a
+    # choice model needs it, because its denominator is the pool of players
+    # still available. What stays hidden is who goes *between* k and the
+    # target, which is the thing being predicted.
+    gone_by_pick =
+      Map.new(ks, fn k ->
+        {k, for({player, at} <- taken_at, at < k, into: MapSet.new(), do: player)}
+      end)
+
     # Every clause here is a filter, including anything that looks like an
     # assignment: `went_at = Map.get(taken_at, player)` reads as a binding but
     # a comprehension treats it as a filter on the *value*, so every player
@@ -206,7 +218,7 @@ defmodule SleeperPlayerApi.Intel.Calibration do
       target = k + delta
 
       %{
-        predicted: predict.(player, k, target),
+        predicted: predict.(player, k, target, Map.fetch!(gone_by_pick, k)),
         actual: available_at?(taken_at, player, target),
         contested: contested?(Map.get(adp, player), k, target)
       }
