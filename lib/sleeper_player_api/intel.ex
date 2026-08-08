@@ -234,6 +234,39 @@ defmodule SleeperPlayerApi.Intel do
     )
   end
 
+  @doc """
+  One manager's recent activity, plus what it rests on.
+
+  Bundles `transactions_for_user/2` with `transaction_coverage/2` and the
+  names behind the player ids in `adds`/`drops`, so the caller renders from
+  one response.
+
+  **`coverage` travels with the transactions, always.** A list of five trades
+  means something different across 42 leagues than across 4, and this feature
+  has shipped a figure that outran its sample size four separate times. The
+  two are returned together so a caller cannot render one without the other
+  being available.
+
+  Names are resolved here rather than left to the client for the same reason
+  `/intel` resolves crush names: the section that renders this has no player
+  database of its own.
+  """
+  @spec manager_activity(integer | String.t(), keyword) :: map
+  def manager_activity(user_id, opts \\ []) do
+    transactions = transactions_for_user(user_id, opts)
+
+    player_ids =
+      transactions
+      |> Enum.flat_map(fn t -> Map.keys(t.adds || %{}) ++ Map.keys(t.drops || %{}) end)
+      |> Enum.uniq()
+
+    %{
+      transactions: transactions,
+      players: player_lookup(player_ids),
+      coverage: transaction_coverage(user_id, opts)
+    }
+  end
+
   # ---------------------------------------------------------------------
   # Transactions (plan §6 step 6)
   # ---------------------------------------------------------------------
