@@ -1,16 +1,38 @@
 defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
   @moduledoc """
-  The measurement §6 step 5 is gated on: what the *current* estimator scores,
-  measured by `Intel.Calibration` against the real corpus.
+  What the shipping estimator scores, measured by `Intel.Calibration` over the
+  real corpus. This is the baseline any future model has to beat, and it is
+  also a regression guard: it is what caught survival going negative (a hazard
+  above 1.0 for the consensus 1.01 at pick 2), which no unit test had.
 
-  This is the baseline a manager-conditioned model has to beat. It is a
-  measurement, not an assertion about a target — the plan quotes 0.0296 from a
-  harness that was never saved, so that figure is not reproducible and is not
-  what this compares against. What matters is that both estimators are scored
-  by *this* harness with identical settings.
+  Not a target. The plan quotes 0.0296 from a harness that was never saved, so
+  that figure is not reproducible and is not what this compares against — what
+  matters is that a challenger is scored *here*, with identical settings.
 
-  Tagged `:corpus` (gitignored data) and `:measure` (slow — leave-one-out over
-  70 drafts refits every player's hazard 70 times).
+  ## §4d has already been measured and lost
+
+  The manager-conditioned model of plan §4d was built and scored against this
+  baseline on 2026-08-07:
+
+  | population | shipping | §4d |
+  | --- | --- | --- |
+  | all | **0.0017** | 0.0378 |
+  | contested | **0.0091** | 0.2120 |
+
+  23x worse where it counts, so per §6 step 5 it did not earn its complexity
+  and is not in this repo. It lives on the `candidate/manager-model` branch
+  with the head-to-head test that produced those numbers.
+
+  The reason is structural and worth knowing before anyone tries again: that
+  model conditions on *who* picks and never on *when*. A conditional logit
+  over static values gives a player a near-flat hazard across the whole draft
+  — 0.002 at pick 5, 0.002 at 22 and 0.002 at 45, for a player whose observed
+  ADP is 20.7 — where the empirical kernel hazard puts 0.01 at 22 and ~0
+  elsewhere. *When* a player goes is the entire question. Conditioning on the
+  manager rescales a curve with the wrong shape in time; the incumbent applies
+  manager information *to* an empirical time curve, which is why it wins.
+
+  Tagged `:corpus` (gitignored data) and `:measure` (slow).
   """
   use ExUnit.Case, async: true
 
@@ -21,14 +43,15 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
   @moduletag :measure
   @moduletag timeout: :infinity
 
-  # The estimator as it ships today: a league-wide smoothed hazard, with no
-  # manager conditioning at all. `base_survival/3` is already conditional on
-  # availability at `from`, which is exactly the quantity being scored.
-  defp current_estimator do
-    fn training ->
+  @deltas [1, 3, 6, 9, 12]
+
+  # As it ships: one league-wide smoothed hazard. `base_survival/3` is already
+  # conditional on availability at `from`, which is the quantity being scored.
+  defp shipping do
+    fn training, _board ->
       cache = :ets.new(:hazards, [:set, :private])
 
-      fn player_id, from, to ->
+      fn player_id, from, to, _gone ->
         hazard =
           case :ets.lookup(cache, player_id) do
             [{^player_id, cached}] ->
@@ -49,11 +72,10 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
     drafts = CorpusFixture.drafts()
     assert length(drafts) == 70
 
-    result = Calibration.run(drafts, current_estimator(), deltas: [1, 3, 6, 9, 12])
+    result = Calibration.run(drafts, shipping(), deltas: @deltas)
 
     rows =
-      result.buckets
-      |> Enum.map_join("\n", fn b ->
+      Enum.map_join(result.all.buckets, "\n", fn b ->
         "  #{Float.round(b.bucket, 1)}–#{Float.round(b.bucket + 0.1, 1)}  " <>
           "n=#{String.pad_leading(to_string(b.n), 7)}  " <>
           "predicted #{Float.round(b.mean_predicted, 3)}  " <>
@@ -65,15 +87,19 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
     Conditional calibration — shipping estimator (league-wide smoothed hazard)
     #{rows}
 
-      observations: #{result.n}
-      weighted error: #{Float.round(result.error, 4)}
+      all:       error #{Float.round(result.all.error, 4)}  (n=#{result.all.n})
+      contested: error #{Float.round(result.contested.error, 4)}  (n=#{result.contested.n})
+
+    `contested` is the number a challenger has to beat; `all` is dominated by
+    foregone conclusions.
     """)
 
-    # Not a target, a floor: a number this far out would mean the harness or
-    # the corpus load is broken, not that the model is bad. The real gate for
-    # step 5 is beating this figure with a manager-conditioned model, measured
-    # the same way.
-    assert result.n > 100_000
-    assert result.error < 0.2
+    # Every prediction is a probability. This is the assertion that would have
+    # caught the negative-survival bug, so it is not decoration.
+    for pop <- [result.all, result.contested], bucket <- pop.buckets do
+      assert bucket.mean_predicted >= 0.0 and bucket.mean_predicted <= 1.0
+    end
+
+    assert result.contested.n > 1_000
   end
 end

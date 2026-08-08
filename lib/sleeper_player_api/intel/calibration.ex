@@ -56,8 +56,12 @@ defmodule SleeperPlayerApi.Intel.Calibration do
   @doc """
   Runs leave-one-draft-out calibration.
 
-  `predict_builder` is `(training_drafts -> predict_fun)`, and `predict_fun`
-  is `(player_id, from_pick, to_pick -> probability)`. Taking a builder rather
+  `predict_builder` is `(training_drafts, board -> predict_fun)`, where `board`
+  is the held-out draft's `%{pick => manager}` (see `board_of/1`), and
+  `predict_fun`
+  is `(player_id, from_pick, to_pick, gone -> probability)`, where `gone` is
+  the MapSet of players already off the board when `from_pick` starts.
+  Taking a builder rather
   than a bare function is what lets an estimator do its per-corpus fitting
   once per held-out draft instead of once per observation — with 70 drafts and
   ~130 players that is the difference between minutes and hours.
@@ -71,7 +75,25 @@ defmodule SleeperPlayerApi.Intel.Calibration do
     * `:players` — the candidate pool (default: every player appearing in the
       full corpus)
 
-  Returns `%{error: float, n: integer, buckets: [%{...}]}`.
+  Returns `%{all: summary, contested: summary}`, each
+  `%{error: float, n: integer, buckets: [%{...}]}`.
+
+  ## Two populations, and why
+
+  `all` scores every player at every pick. It is honest and it is also
+  overwhelmingly *easy*: measured on the 70-draft corpus, 1.42M of 1.58M
+  observations land in the 0.9–1.0 bucket, because "does this player last one
+  more pick" is a foregone conclusion nearly everywhere. A number dominated by
+  foregone conclusions barely moves between two models, so it cannot decide
+  whether one is better.
+
+  `contested` keeps only the observations where the player's league ADP falls
+  inside the `[k, target]` window — the picks where he plausibly goes, which is
+  the region the UI is actually consulted about. Both are reported, always,
+  and the definition is deliberately independent of any model's output: it
+  uses the *observed* ADP from the training corpus only, so it cannot be
+  reverse-engineered from a result. Narrowing a population until the answer
+  looks good is precisely how the original harness went wrong (§3g).
   """
   @spec run([map], (list -> (String.t(), number, number -> float)), keyword) :: map
   def run(drafts, predict_builder, opts \\ []) do
@@ -79,13 +101,68 @@ defmodule SleeperPlayerApi.Intel.Calibration do
     players = Keyword.get(opts, :players) || corpus_players(drafts)
 
     observations =
-      Enum.flat_map(drafts, fn held_out ->
-        training = Enum.reject(drafts, &(&1 == held_out))
-        predict = predict_builder.(training)
-        score_draft(held_out, players, predict, deltas, opts)
+      drafts
+      # By index, not by value. `Enum.reject(drafts, &(&1 == held_out))` reads
+      # as "leave this one out" and is actually "leave out everything equal to
+      # this one" — two drafts with identical picks would both vanish, and the
+      # model would be fit on a quietly smaller corpus with nothing to show for
+      # it. Same family as the comprehension-filter bug above: a harness
+      # scoring the wrong population without failing.
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {held_out, index} ->
+        training = List.delete_at(drafts, index)
+        # The board is who *owns* each upcoming pick, which is known in
+        # production — you can see whose turn is next. What is not known is
+        # what they will take, so this carries managers only and never a
+        # player id. A manager-conditioned model needs the first and must not
+        # see the second.
+        predict = predict_builder.(training, board_of(held_out))
+        # From the training corpus only — a held-out draft must not inform
+        # which of its own observations count.
+        adp = observed_adp(training, players)
+        score_draft(held_out, players, predict, deltas, adp, opts)
       end)
 
-    summarize(observations)
+    %{
+      all: summarize(observations),
+      contested: observations |> Enum.filter(& &1.contested) |> summarize()
+    }
+  end
+
+  @doc """
+  Mean observed normalized pick per player, over the drafts that took him.
+  `nil` for a player no draft in `drafts` took.
+
+  Deliberately not `Estimator.adp_summary/1`: this module scores estimators
+  and must not depend on one of them to decide which observations count.
+  """
+  @spec observed_adp([map], [String.t()]) :: %{String.t() => float | nil}
+  def observed_adp(drafts, players) do
+    picks_by_player =
+      for draft <- drafts, pick <- draft.picks, reduce: %{} do
+        acc -> Map.update(acc, pick.player_id, [pick.norm], &[pick.norm | &1])
+      end
+
+    Map.new(players, fn player ->
+      case Map.get(picks_by_player, player) do
+        nil -> {player, nil}
+        norms -> {player, Enum.sum(norms) / length(norms)}
+      end
+    end)
+  end
+
+  @doc """
+  Who owns each pick of `draft`, as `%{integer_pick => manager}`.
+
+  Managers only — deliberately no player ids. In production the board is
+  known and the outcomes are not, and a harness that handed a model the
+  held-out draft's picks would be scoring it on the answer.
+  """
+  @spec board_of(map) :: %{integer => String.t()}
+  def board_of(draft) do
+    Enum.reduce(draft.picks, %{}, fn pick, acc ->
+      Map.put_new(acc, trunc(pick.norm), pick.manager)
+    end)
   end
 
   @doc """
@@ -97,7 +174,7 @@ defmodule SleeperPlayerApi.Intel.Calibration do
   end
 
   # One held-out draft's worth of (predicted, actual) pairs.
-  defp score_draft(held_out, players, predict, deltas, opts) do
+  defp score_draft(held_out, players, predict, deltas, adp, opts) do
     # The earliest pick each player went at in this draft, or nil. `min` and
     # not `hd`: a corpus draft can contain the same player twice only through
     # bad data, but taking whichever came first is the conservative read.
@@ -108,6 +185,16 @@ defmodule SleeperPlayerApi.Intel.Calibration do
 
     last = trunc(held_out.l_d)
     ks = Keyword.get(opts, :ks) || 1..last
+
+    # Who is already off the board when each pick starts. This is production
+    # knowledge — at pick k you can see everything taken before it — and a
+    # choice model needs it, because its denominator is the pool of players
+    # still available. What stays hidden is who goes *between* k and the
+    # target, which is the thing being predicted.
+    gone_by_pick =
+      Map.new(ks, fn k ->
+        {k, for({player, at} <- taken_at, at < k, into: MapSet.new(), do: player)}
+      end)
 
     # Every clause here is a filter, including anything that looks like an
     # assignment: `went_at = Map.get(taken_at, player)` reads as a binding but
@@ -131,11 +218,19 @@ defmodule SleeperPlayerApi.Intel.Calibration do
       target = k + delta
 
       %{
-        predicted: predict.(player, k, target),
-        actual: available_at?(taken_at, player, target)
+        predicted: predict.(player, k, target, Map.fetch!(gone_by_pick, k)),
+        actual: available_at?(taken_at, player, target),
+        contested: contested?(Map.get(adp, player), k, target)
       }
     end
   end
+
+  # The question is live when the pick he usually goes at sits inside the
+  # window being asked about. Outside it the answer is nearly always foregone:
+  # well before his ADP he is certainly still there, well after it he is
+  # certainly gone, and neither tells you much about an estimator.
+  defp contested?(nil, _k, _target), do: false
+  defp contested?(adp, k, target), do: adp >= k and adp <= target
 
   # On the board when pick `n` *starts*. A player taken at exactly `n` was
   # available at `n` — the hazard at `n` is the chance he goes at it, so he is
