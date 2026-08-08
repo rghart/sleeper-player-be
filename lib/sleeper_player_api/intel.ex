@@ -42,7 +42,8 @@ defmodule SleeperPlayerApi.Intel do
     PlayerValue,
     DraftParticipant,
     ObservedLeague,
-    ObservedTransaction
+    ObservedTransaction,
+    LeagueMember
   }
 
   @batch_size 1000
@@ -306,6 +307,19 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
+  Records which tracked leaguemates are in which leagues. Idempotent.
+  """
+  @spec upsert_league_members([map]) :: {non_neg_integer, nil}
+  def upsert_league_members(memberships) do
+    insert_all_batched(
+      LeagueMember,
+      Enum.uniq(memberships),
+      conflict_target: [:league_id, :user_id],
+      on_conflict: :nothing
+    )
+  end
+
+  @doc """
   Upserts transactions by Sleeper transaction id.
 
   Keyed on the transaction's own id rather than a synthetic one because a
@@ -423,10 +437,24 @@ defmodule SleeperPlayerApi.Intel do
       |> select([t], count(fragment("DISTINCT ?", t.league_id)))
       |> Repo.one()
 
+    # *Their* leagues, not every league in the corpus. Comparing a manager's
+    # leagues-with-activity against the whole corpus reported "33 of 175" for
+    # someone who is in 42 — a denominator that describes nobody. Found by
+    # running the crawler against the live API; every fixture had one league,
+    # so nothing caught it.
     known =
-      ObservedLeague
-      |> then(fn q -> if season, do: where(q, [l], l.season == ^season), else: q end)
-      |> select([l], count(l.id))
+      LeagueMember
+      |> where([m], m.user_id == ^user_id)
+      |> then(fn q ->
+        if season do
+          join(q, :inner, [m], l in ObservedLeague,
+            on: l.id == m.league_id and l.season == ^season
+          )
+        else
+          q
+        end
+      end)
+      |> select([m], count(m.league_id))
       |> Repo.one()
 
     last =

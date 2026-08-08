@@ -192,25 +192,34 @@ defmodule SleeperPlayerApi.Intel.TransactionsTest do
   end
 
   describe "transaction_coverage/2" do
-    test "reports leagues seen against leagues known, so a partial answer can say so" do
-      # A fan-out that saw 1 of 2 leagues and reported "3 transactions" would
-      # be a figure without its sample size — the error this feature keeps
-      # re-learning.
+    test "counts THEIR leagues as the denominator, not every league in the corpus" do
+      # The bug a live crawl exposed: comparing leagues-with-activity against
+      # the whole corpus reported "33 of 175" for a manager who is in 42.
+      # Every fixture had one league, so nothing here caught it.
       seed_league()
-      Intel.upsert_observed_leagues([%{id: 999, name: "Another", season: "2026"}])
+      Intel.upsert_observed_leagues([%{id: 999, name: "Not his", season: "2026"}])
+      Intel.upsert_observed_leagues([%{id: 1000, name: "His, quiet", season: "2026"}])
+
+      # He is in two of the three; 999 belongs to someone else entirely.
+      Intel.upsert_league_members([
+        %{league_id: @league, user_id: @baconstains},
+        %{league_id: 1000, user_id: @baconstains},
+        %{league_id: 999, user_id: @atekipp}
+      ])
+
       Intel.upsert_observed_transactions([transaction(1, %{})])
 
       coverage = Intel.transaction_coverage(@baconstains, season: "2026")
 
-      assert coverage.leagues_seen == 1
-      assert coverage.leagues_known == 2
+      assert coverage.leagues_seen == 1, "activity in one of his leagues"
+      assert coverage.leagues_known == 2, "he is in two, not the corpus's three"
       assert coverage.last_crawled_at != nil
     end
 
     test "is zeroes rather than nils for a user with nothing stored" do
       seed_league()
 
-      assert %{leagues_seen: 0, leagues_known: 1} = Intel.transaction_coverage(@atekipp)
+      assert %{leagues_seen: 0, leagues_known: 0} = Intel.transaction_coverage(@atekipp)
     end
   end
 end

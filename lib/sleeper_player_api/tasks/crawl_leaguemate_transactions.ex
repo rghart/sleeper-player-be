@@ -135,11 +135,13 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
         user_ids = users |> Enum.map(& &1["user_id"]) |> Enum.reject(&is_nil/1)
         summary = %{summary | leaguemates: length(user_ids)}
 
-        {leagues, summary} = enumerate_leagues(user_ids, season, summary)
+        {leagues, memberships, summary} = enumerate_leagues(user_ids, season, summary)
         {current_week, summary} = current_week(summary)
 
         summary = %{summary | leagues_seen: map_size(leagues)}
         store_leagues(leagues, season)
+        # After the leagues exist, since this references them.
+        Intel.upsert_league_members(memberships)
 
         summary =
           Enum.reduce(leagues, summary, fn {id, _name}, acc ->
@@ -159,9 +161,11 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
   # One call per leaguemate. The dedupe is the whole reason this is a crawl:
   # 257 memberships collapse to 176 leagues.
   defp enumerate_leagues(user_ids, season, summary) do
-    Enum.reduce(user_ids, {%{}, summary}, fn user_id, {acc, summary} ->
+    Enum.reduce(user_ids, {%{}, [], summary}, fn user_id, {acc, members, summary} ->
       case request("/user/#{user_id}/leagues/nfl/#{season}", summary) do
         {{:ok, leagues}, summary} when is_list(leagues) ->
+          ids = leagues |> Enum.map(&to_int(&1["league_id"])) |> Enum.reject(&is_nil/1)
+
           merged =
             Enum.reduce(leagues, acc, fn league, inner ->
               case to_int(league["league_id"]) do
@@ -170,10 +174,15 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
               end
             end)
 
-          {merged, summary}
+          # Kept, not discarded in the dedupe: coverage needs to know how many
+          # leagues *this* manager is in, not how many the corpus holds.
+          new_members =
+            Enum.map(ids, &%{league_id: &1, user_id: to_int(user_id)})
+
+          {merged, members ++ new_members, summary}
 
         {{:error, reason}, summary} ->
-          {acc, add_error(summary, {:user_leagues_failed, user_id, reason})}
+          {acc, members, add_error(summary, {:user_leagues_failed, user_id, reason})}
       end
     end)
   end

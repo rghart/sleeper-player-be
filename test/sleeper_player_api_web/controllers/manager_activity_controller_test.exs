@@ -18,6 +18,11 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
       }
     ])
 
+    Intel.upsert_league_members([
+      %{league_id: @league, user_id: @alice},
+      %{league_id: @league, user_id: @bob}
+    ])
+
     {:ok, conn: put_req_header(conn, "accept", "application/json")}
   end
 
@@ -132,7 +137,8 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
 
     assert body["transactions"] == []
     assert body["coverage"]["leaguesSeen"] == 0
-    assert body["coverage"]["leaguesKnown"] == 1
+    # Not a member of anything we know about, so the denominator is theirs: 0.
+    assert body["coverage"]["leaguesKnown"] == 0
   end
 
   test "a non-numeric limit is a 422, not a 500", %{conn: conn} do
