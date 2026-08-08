@@ -1,20 +1,43 @@
 defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
   @moduledoc """
-  The measurement §6 step 5 is gated on: the shipping estimator against the
-  §4d manager-conditioned candidate, scored by `Intel.Calibration` over the
-  real corpus with identical settings.
+  What the shipping estimator scores, measured by `Intel.Calibration` over the
+  real corpus. This is the baseline any future model has to beat, and it is
+  also a regression guard: it is what caught survival going negative (a hazard
+  above 1.0 for the consensus 1.01 at pick 2), which no unit test had.
 
-  Both are measured in one run, on both populations, and the populations were
-  defined and committed before either number was seen. The plan's 0.0296 is
-  not the comparison — that harness was never saved, so the figure is not
-  reproducible; what matters is the two models scored here, the same way.
+  Not a target. The plan quotes 0.0296 from a harness that was never saved, so
+  that figure is not reproducible and is not what this compares against — what
+  matters is that a challenger is scored *here*, with identical settings.
+
+  ## §4d has already been measured and lost
+
+  The manager-conditioned model of plan §4d was built and scored against this
+  baseline on 2026-08-07:
+
+  | population | shipping | §4d |
+  | --- | --- | --- |
+  | all | **0.0017** | 0.0378 |
+  | contested | **0.0091** | 0.2120 |
+
+  23x worse where it counts, so per §6 step 5 it did not earn its complexity
+  and is not in this repo. It lives on the `candidate/manager-model` branch
+  with the head-to-head test that produced those numbers.
+
+  The reason is structural and worth knowing before anyone tries again: that
+  model conditions on *who* picks and never on *when*. A conditional logit
+  over static values gives a player a near-flat hazard across the whole draft
+  — 0.002 at pick 5, 0.002 at 22 and 0.002 at 45, for a player whose observed
+  ADP is 20.7 — where the empirical kernel hazard puts 0.01 at 22 and ~0
+  elsewhere. *When* a player goes is the entire question. Conditioning on the
+  manager rescales a curve with the wrong shape in time; the incumbent applies
+  manager information *to* an empirical time curve, which is why it wins.
 
   Tagged `:corpus` (gitignored data) and `:measure` (slow).
   """
   use ExUnit.Case, async: true
 
   alias SleeperPlayerApi.CorpusFixture
-  alias SleeperPlayerApi.Intel.{Calibration, Estimator, ManagerModel}
+  alias SleeperPlayerApi.Intel.{Calibration, Estimator}
 
   @moduletag :corpus
   @moduletag :measure
@@ -22,9 +45,8 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
 
   @deltas [1, 3, 6, 9, 12]
 
-  # As it ships: one league-wide smoothed hazard, no manager conditioning.
-  # `base_survival/3` is already conditional on availability at `from`, which
-  # is exactly the quantity being scored.
+  # As it ships: one league-wide smoothed hazard. `base_survival/3` is already
+  # conditional on availability at `from`, which is the quantity being scored.
   defp shipping do
     fn training, _board ->
       cache = :ets.new(:hazards, [:set, :private])
@@ -46,55 +68,38 @@ defmodule SleeperPlayerApi.Intel.CalibrationBaselineTest do
     end
   end
 
-  # §4d: a Plackett-Luce choice model per manager, fitted per training corpus.
-  defp manager_conditioned do
-    fn training, board ->
-      fitted = ManagerModel.fit(training, board: board)
-      fn player_id, from, to, gone -> ManagerModel.survival(fitted, player_id, from, to, gone) end
-    end
-  end
-
-  defp report(label, result) do
-    IO.puts("\n  #{label}")
-
-    for pop <- [:all, :contested] do
-      r = Map.fetch!(result, pop)
-      IO.puts("    #{pop}: error #{Float.round(r.error, 4)}  (n=#{r.n})")
-    end
-  end
-
-  test "scores the shipping estimator against the §4d manager-conditioned model" do
+  test "measures the shipping estimator, and prints the baseline to beat" do
     drafts = CorpusFixture.drafts()
     assert length(drafts) == 70
 
-    baseline = Calibration.run(drafts, shipping(), deltas: @deltas)
-    candidate = Calibration.run(drafts, manager_conditioned(), deltas: @deltas)
+    result = Calibration.run(drafts, shipping(), deltas: @deltas)
 
-    IO.puts("\n=== §6 step 5 gate ===")
-    report("shipping (league-wide smoothed hazard)", baseline)
-    report("candidate (§4d manager-conditioned)", candidate)
-
-    verdict = fn pop ->
-      b = Map.fetch!(baseline, pop).error
-      c = Map.fetch!(candidate, pop).error
-
-      "#{pop}: #{if c < b, do: "candidate wins", else: "baseline wins"} " <>
-        "(#{Float.round(b, 4)} vs #{Float.round(c, 4)})"
-    end
+    rows =
+      Enum.map_join(result.all.buckets, "\n", fn b ->
+        "  #{Float.round(b.bucket, 1)}–#{Float.round(b.bucket + 0.1, 1)}  " <>
+          "n=#{String.pad_leading(to_string(b.n), 7)}  " <>
+          "predicted #{Float.round(b.mean_predicted, 3)}  " <>
+          "observed #{Float.round(b.observed, 3)}"
+      end)
 
     IO.puts("""
 
-      #{verdict.(:all)}
-      #{verdict.(:contested)}
+    Conditional calibration — shipping estimator (league-wide smoothed hazard)
+    #{rows}
 
-    The contested population is the one that discriminates; `all` is dominated
-    by foregone conclusions. If the candidate does not win there, §6 step 5
-    says it has not earned its complexity.
+      all:       error #{Float.round(result.all.error, 4)}  (n=#{result.all.n})
+      contested: error #{Float.round(result.contested.error, 4)}  (n=#{result.contested.n})
+
+    `contested` is the number a challenger has to beat; `all` is dominated by
+    foregone conclusions.
     """)
 
-    # Sanity floors only — the verdict above is the deliverable, and asserting
-    # a direction here would turn a measurement into a foregone conclusion.
-    assert baseline.contested.n > 1_000
-    assert candidate.contested.n == baseline.contested.n
+    # Every prediction is a probability. This is the assertion that would have
+    # caught the negative-survival bug, so it is not decoration.
+    for pop <- [result.all, result.contested], bucket <- pop.buckets do
+      assert bucket.mean_predicted >= 0.0 and bucket.mean_predicted <= 1.0
+    end
+
+    assert result.contested.n > 1_000
   end
 end
