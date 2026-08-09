@@ -11,7 +11,9 @@ defmodule SleeperPlayerApiWeb.AvailabilityJSON do
   def show(%{availability: a}) do
     %{
       league: a.league,
-      draftId: a.draft_id,
+      # String — see IntelJSON.userId. Nothing reads this back today, but a
+      # rounded id in a response is a trap for whoever does next.
+      draftId: to_string(a.draft_id),
       currentPick: a.current_pick,
       lastPick: a.last_pick,
       teams: a.teams,

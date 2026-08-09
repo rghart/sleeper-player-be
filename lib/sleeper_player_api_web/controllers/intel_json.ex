@@ -25,7 +25,14 @@ defmodule SleeperPlayerApiWeb.IntelJSON do
 
   defp manager(m) do
     %{
-      userId: m.user_id,
+      # A STRING, deliberately. Sleeper ids are 19 digits and exceed
+      # JavaScript's Number.MAX_SAFE_INTEGER (9,007,199,254,740,991), so
+      # `JSON.parse` silently rounds them: 859581197427257344 arrives as
+      # ...257300. That is invisible while an id is only ever compared to
+      # itself, and breaks the moment one is used to call another endpoint -
+      # which is exactly what happened when the Leaguemates profile started
+      # requesting /activity.
+      userId: to_string(m.user_id),
       displayName: m.display_name,
       leaguesCount: m.leagues_count,
       draftsCount: m.drafts_count,

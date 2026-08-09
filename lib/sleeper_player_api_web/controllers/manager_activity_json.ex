@@ -26,10 +26,13 @@ defmodule SleeperPlayerApiWeb.ManagerActivityJSON do
     }
   end
 
+  # Every id here is a string for the same reason `IntelJSON.userId` is:
+  # Sleeper's 19-digit ids exceed JavaScript's safe integer range, and
+  # `JSON.parse` rounds them without complaint.
   defp transaction(t) do
     %{
-      id: t.id,
-      leagueId: t.league_id,
+      id: to_string(t.id),
+      leagueId: to_string(t.league_id),
       week: t.week,
       # Which roster is *theirs* in this transaction's league. `adds`/`drops`
       # are league-wide, so without this a trade renders the same player as
@@ -42,8 +45,8 @@ defmodule SleeperPlayerApiWeb.ManagerActivityJSON do
       # labels it rather than the API hiding it.
       status: t.status,
       created: t.created,
-      creator: t.creator,
-      participantIds: t.participant_ids,
+      creator: t.creator && to_string(t.creator),
+      participantIds: Enum.map(t.participant_ids || [], &to_string/1),
       adds: t.adds || %{},
       drops: t.drops || %{},
       draftPicks: t.draft_picks || [],
