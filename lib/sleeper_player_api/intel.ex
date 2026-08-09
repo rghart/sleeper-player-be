@@ -42,6 +42,7 @@ defmodule SleeperPlayerApi.Intel do
     PlayerValue,
     DraftParticipant,
     ObservedLeague,
+    ObservedRoster,
     ObservedTransaction,
     LeagueMember
   }
@@ -304,6 +305,79 @@ defmodule SleeperPlayerApi.Intel do
           ]
         )
     )
+  end
+
+  @doc """
+  Stores each league's rosters and their current contents.
+
+  Unlike `upsert_observed_leagues/1` this **replaces** `player_ids` rather
+  than coalescing it. An empty list is a real answer — a manager can drop to
+  nothing, and a roster that has been emptied must stop reporting the players
+  it used to hold. Coalescing would make ownership monotonically increasing,
+  which is the one thing a "how much do they own" number must never be.
+  """
+  @spec upsert_observed_rosters([map]) :: {non_neg_integer, nil}
+  def upsert_observed_rosters(rosters) do
+    insert_all_batched(
+      ObservedRoster,
+      rosters,
+      conflict_target: [:league_id, :roster_id],
+      replace: [:owner_id, :player_ids, :fetched_at, :updated_at]
+    )
+  end
+
+  @doc """
+  Per-manager ownership: how many of each manager's leagues hold each player.
+
+  Returns `{ownership, leagues_seen}` where `ownership` is
+  `%{{user_id, player_id} => count}` and `leagues_seen` is
+  `%{user_id => count}` — the honest denominator, being the leagues we have
+  roster data for, not every league the manager is in. A league whose rosters
+  have never been fetched, or that Sleeper returned empty, is in neither.
+
+  `player_ids` narrows the ownership map; the denominators are always the
+  manager's full count, because "owns him in 2" only means something against
+  how many leagues he has.
+  """
+  @spec ownership([String.t()] | nil) :: {map, map}
+  def ownership(player_ids \\ nil) do
+    base = from(r in ObservedRoster, where: not is_nil(r.owner_id))
+
+    # A manager's denominator counts the leagues we can see, and a roster
+    # with no players in it is a league we cannot see into — 22 of the 176
+    # come back empty, and counting them would read every ownership figure
+    # ~13% low.
+    leagues_seen =
+      base
+      |> where([r], fragment("cardinality(?) > 0", r.player_ids))
+      |> group_by([r], r.owner_id)
+      |> select([r], {r.owner_id, count(r.league_id, :distinct)})
+      |> Repo.all()
+      |> Map.new()
+
+    # `inner_lateral_join`, not `join`: the subquery reads `r.player_ids` from
+    # the row it is joined to, which a plain join cannot see ("invalid
+    # reference to FROM-clause entry").
+    unnested =
+      from(r in base,
+        inner_lateral_join: pid in fragment("SELECT unnest(?) AS id", r.player_ids),
+        on: true,
+        group_by: [r.owner_id, pid.id],
+        select: {r.owner_id, pid.id, count(r.league_id, :distinct)}
+      )
+
+    ownership_query =
+      case player_ids do
+        nil -> unnested
+        ids -> from([r, pid] in unnested, where: pid.id in ^ids)
+      end
+
+    ownership =
+      ownership_query
+      |> Repo.all()
+      |> Map.new(fn {owner_id, player_id, count} -> {{owner_id, player_id}, count} end)
+
+    {ownership, leagues_seen}
   end
 
   @doc """
@@ -952,6 +1026,41 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
+  `ownership/1` keyed by manager name rather than user id, ready for
+  `Availability.build/1`.
+
+  Returns `%{owns: %{{manager, player_id} => count}, leagues: %{manager =>
+  count}}`. Managers we hold no roster data for are absent from `leagues`
+  entirely, which is what lets the response distinguish "owns him nowhere"
+  from "we cannot see his leagues" — the same distinction the no-chip trap
+  is about.
+  """
+  @spec ownership_by_manager([String.t()], %{integer => String.t()}) :: %{
+          owns: map,
+          leagues: map
+        }
+  def ownership_by_manager(player_ids, user_id_to_manager) do
+    {owns, leagues_seen} = ownership(player_ids)
+
+    %{
+      owns:
+        for {{user_id, player_id}, count} <- owns,
+            manager = Map.get(user_id_to_manager, user_id),
+            not is_nil(manager),
+            into: %{} do
+          {{manager, player_id}, count}
+        end,
+      leagues:
+        for {user_id, count} <- leagues_seen,
+            manager = Map.get(user_id_to_manager, user_id),
+            not is_nil(manager),
+            into: %{} do
+          {manager, count}
+        end
+    }
+  end
+
+  @doc """
   The `/availability` endpoint's context entry point (plan §3f step 4).
   Trade-resolves `draft_id`'s remaining picks and, for every corpus player
   still on the board, its Kaplan-Meier survival curve conditioned on that
@@ -1084,7 +1193,8 @@ defmodule SleeperPlayerApi.Intel do
         candidate_lookup: player_lookup(candidate_ids),
         market_rank: Estimator.rookie_class_rank(market_rookie_class_entries(draft.season)),
         raw_picks: manager_pick_strings(candidate_ids, user_id_to_manager),
-        eligible_ids: eligible_ids(candidate_ids, player_ids)
+        eligible_ids: eligible_ids(candidate_ids, player_ids),
+        ownership: ownership_by_manager(candidate_ids, user_id_to_manager)
       })
     end
   end

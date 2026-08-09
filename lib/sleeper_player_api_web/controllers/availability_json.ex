@@ -72,8 +72,24 @@ defmodule SleeperPlayerApiWeb.AvailabilityJSON do
   # none of which vary by target pick. See `Estimator.hazards/6`.
   defp hazard(h), do: %{pick: h.pick, prob: h.prob}
 
+  # `times`/`of`/`adp`/`picks` are the draft read; `owns`/`ofLeagues` are the
+  # holdings read. Both can be present, and either can be empty on its own -
+  # a manager who traded for him has owns > 0 with times 0, and one who
+  # drafted him and moved him on has the reverse.
+  #
+  # `ofLeagues` is null, not 0, when we hold no roster data for that manager:
+  # "owns him in 0 of 0 leagues" is not a fact about him, and the client has
+  # to be able to tell that apart from a real zero.
   defp per_manager(m) do
-    %{manager: m.manager, times: m.times, of: m.of, adp: m.adp, picks: m.picks}
+    %{
+      manager: m.manager,
+      times: m.times,
+      of: m.of,
+      adp: m.adp,
+      picks: m.picks,
+      owns: m.owns,
+      ofLeagues: m.of_leagues
+    }
   end
 
   defp notable(false), do: false

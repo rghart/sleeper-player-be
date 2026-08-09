@@ -96,6 +96,93 @@ defmodule SleeperPlayerApi.Intel.AvailabilityTest do
     end
   end
 
+  describe "per-manager ownership" do
+    # One corpus draft in which bob took P1. alice never drafted him but
+    # holds him in 3 of her 9 leagues - the trade/waiver case, which is 94%
+    # of real ownership and invisible to the corpus.
+    setup do
+      corpus = [%{l_d: 8.0, picks: [%{norm: 2.0, player_id: "P1", manager: "bob"}]}]
+
+      ownership = %{
+        owns: %{{"alice", "P1"} => 3, {"bob", "P1"} => 1},
+        leagues: %{"alice" => 9, "bob" => 4, "carol" => 2}
+      }
+
+      {:ok, input: base_input(%{corpus: corpus, ownership: ownership, limit: 1})}
+    end
+
+    test "lists a manager who owns him but never drafted him", %{input: input} do
+      assert {:ok, response} = Availability.build(input)
+      assert [target] = response.targets
+
+      assert [alice, bob] = target.per_manager
+      assert alice.manager == "alice"
+      assert alice.owns == 3
+      assert alice.of_leagues == 9
+      assert alice.times == 0
+      assert alice.adp == nil, "an ownership-only entry has no draft ADP to report"
+      assert alice.picks == []
+
+      assert bob.manager == "bob"
+      assert bob.times == 1
+      assert bob.owns == 1
+      assert bob.of_leagues == 4
+      assert bob.adp == 2.0
+    end
+
+    test "a manager who neither drafted nor owns him is still absent", %{input: input} do
+      assert {:ok, response} = Availability.build(input)
+      assert [target] = response.targets
+      refute Enum.any?(target.per_manager, &(&1.manager == "carol"))
+    end
+
+    test "of_leagues is nil for a manager we hold no roster data for" do
+      corpus = [%{l_d: 8.0, picks: [%{norm: 2.0, player_id: "P1", manager: "bob"}]}]
+
+      input =
+        base_input(%{
+          corpus: corpus,
+          limit: 1,
+          ownership: %{owns: %{}, leagues: %{"alice" => 9}}
+        })
+
+      assert {:ok, response} = Availability.build(input)
+      assert [%{manager: "bob", owns: 0, of_leagues: nil}] = hd(response.targets).per_manager
+    end
+
+    test "with no ownership data at all the draft read is unchanged" do
+      corpus = [%{l_d: 8.0, picks: [%{norm: 2.0, player_id: "P1", manager: "bob"}]}]
+      input = base_input(%{corpus: corpus, limit: 1})
+
+      assert {:ok, response} = Availability.build(input)
+
+      assert [%{manager: "bob", times: 1, adp: 2.0, owns: 0, of_leagues: nil}] =
+               hd(response.targets).per_manager
+    end
+
+    # `notable` gates on drafts seen and times taken. An ownership-only entry
+    # has times 0, so it can never become the notable claim - which matters
+    # because notable prints an ADP delta this entry has no ADP for.
+    test "an ownership-only entry can never become the notable claim" do
+      corpus =
+        for i <- 1..10 do
+          %{l_d: 8.0, picks: [%{norm: 2.0, player_id: "P1", manager: "bob"}]}
+          |> Map.put(:draft_no, i)
+        end
+
+      input =
+        base_input(%{
+          corpus: corpus,
+          limit: 1,
+          ownership: %{owns: %{{"alice", "P1"} => 9}, leagues: %{"alice" => 9}}
+        })
+
+      assert {:ok, response} = Availability.build(input)
+      notable = hd(response.targets).notable
+      assert notable == false or notable.manager != "alice"
+    end
+  end
+
   describe "at_pick range checking" do
     # Measured against production before this existed: `at_pick=999` on a
     # 48-pick draft was a 200 with an empty board and a target whose
