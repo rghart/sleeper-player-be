@@ -12,6 +12,11 @@ defmodule SleeperPlayerApiWeb.AvailabilityController do
   `user_id` is required (whose remaining picks are "mine"), `at_pick`,
   `limit` and `player_ids` are optional.
 
+  `at_pick` is validated in two stages, because only the second knows the
+  draft: this module rejects anything non-numeric, and
+  `SleeperPlayerApi.Intel.Availability.build/1` rejects a number outside
+  the draft's own picks. Both come back as a 422 via the fallback.
+
   `player_ids` is a comma-separated list of Sleeper player ids and
   restricts `targets` to those players (plan §6 step 3 — the frontend
   sends its rank list). A blank value is treated as absent rather than as

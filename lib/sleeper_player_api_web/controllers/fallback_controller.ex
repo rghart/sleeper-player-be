@@ -45,6 +45,22 @@ defmodule SleeperPlayerApiWeb.FallbackController do
     })
   end
 
+  # `at_pick` parsed as an integer but isn't a pick this draft has
+  # (`SleeperPlayerApi.Intel.Availability.build/1`). The upper bound is
+  # `last_pick + 1` because that is the `currentPick` a finished draft
+  # reports — see the range check itself for why.
+  def call(conn, {:error, {:pick_out_of_range, at_pick, last_pick}}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{
+      errors: %{
+        detail:
+          "at_pick must be between 1 and #{last_pick + 1} for this #{last_pick}-pick draft, got: #{at_pick}"
+      }
+    })
+  end
+
   # `SleeperPlayerApi.Intel.PickOwnership` couldn't resolve the draft's own
   # order (not `"linear"`/`"snake"`) — per `Availability`'s moduledoc, this
   # is a hard failure rather than a degraded response, because serving
