@@ -543,6 +543,81 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
     end
   end
 
+  describe "GET /api/v1/drafts/:draft_id/availability — at_pick out of range" do
+    # Needs the draft itself (48 picks) to know what "out of range" means,
+    # so unlike the parse-level validation above these go through the stubs.
+    @describetag :corpus
+
+    setup %{bypass: bypass} do
+      seed_users_only!()
+      stub_district_13(bypass)
+      :ok
+    end
+
+    # Measured against production: this was a 200 with `currentPick: 999`,
+    # an empty board, and a target whose `byPick` was empty.
+    test "a pick past the end of the draft is a 422, not a 200 with an empty board", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&at_pick=999"
+        )
+
+      assert json_response(conn, 422)["errors"]["detail"] ==
+               "at_pick must be between 1 and 49 for this 48-pick draft, got: 999"
+    end
+
+    test "pick 0 says the pick is out of range, not that a draft slot is unmapped", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&at_pick=0"
+        )
+
+      detail = json_response(conn, 422)["errors"]["detail"]
+
+      assert detail == "at_pick must be between 1 and 49 for this 48-pick draft, got: 0"
+      refute detail =~ "roster"
+      refute detail =~ "slot"
+    end
+
+    test "a negative pick is a 422 too", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&at_pick=-1"
+        )
+
+      assert json_response(conn, 422)["errors"]["detail"] =~ "got: -1"
+    end
+
+    # The pick selector sends back what the response gave it, and a
+    # finished District 13 reports `currentPick: 49` against `lastPick: 48`.
+    test "the currentPick a finished draft reports is accepted back as at_pick", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&at_pick=49"
+        )
+
+      body = json_response(conn, 200)
+      assert body["currentPick"] == 49
+      assert body["board"] == []
+    end
+
+    test "a real mid-draft pick still works", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&at_pick=48"
+        )
+
+      body = json_response(conn, 200)
+      assert body["currentPick"] == 48
+      assert Enum.map(body["board"], & &1["pick"]) == [48]
+    end
+  end
+
   # ---------------------------------------------------------------------
   # Bypass stubs — the live draft-refresh + roster-ownership fetch path
   # ---------------------------------------------------------------------

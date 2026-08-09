@@ -96,6 +96,53 @@ defmodule SleeperPlayerApi.Intel.AvailabilityTest do
     end
   end
 
+  describe "at_pick range checking" do
+    # Measured against production before this existed: `at_pick=999` on a
+    # 48-pick draft was a 200 with an empty board and a target whose
+    # `byPick` was empty — honest-looking nonsense the request should never
+    # have got past. `at_pick=0` did fail, but only incidentally, as
+    # `{:unmapped_slot, 0}` from `PickOwnership` two layers down.
+    test "a pick past the end of the draft is refused, not answered with an empty board" do
+      input = base_input(%{at_pick: 999})
+      assert Availability.build(input) == {:error, {:pick_out_of_range, 999, 8}}
+    end
+
+    test "pick 0 is out of range on its own terms, not an unmapped draft slot" do
+      input = base_input(%{at_pick: 0})
+      assert Availability.build(input) == {:error, {:pick_out_of_range, 0, 8}}
+    end
+
+    test "a negative pick is refused" do
+      input = base_input(%{at_pick: -5})
+      assert Availability.build(input) == {:error, {:pick_out_of_range, -5, 8}}
+    end
+
+    test "the first and last real picks are both in range" do
+      assert {:ok, first} = Availability.build(base_input(%{at_pick: 1}))
+      assert first.current_pick == 1
+
+      assert {:ok, last} = Availability.build(base_input(%{at_pick: 8}))
+      assert last.current_pick == 8
+      assert last.board == [%{pick: 8, manager: "dave", mine: false, drafts: 0}]
+    end
+
+    # `last_pick + 1` is what a finished draft reports as its own
+    # `currentPick` (see "a draft that has already finished"), so the
+    # response's own value has to be accepted back — otherwise echoing
+    # `currentPick` into `at_pick`, which is exactly what the pick selector
+    # does, 422s at the end of every draft.
+    test "one past the last pick is accepted, because that is what a finished draft reports" do
+      assert {:ok, response} = Availability.build(base_input(%{at_pick: 9}))
+      assert response.current_pick == 9
+      assert response.board == []
+    end
+
+    test "two past the last pick is not" do
+      assert Availability.build(base_input(%{at_pick: 10})) ==
+               {:error, {:pick_out_of_range, 10, 8}}
+    end
+  end
+
   describe "a draft that has already finished" do
     # Regression: found by hitting the deployed endpoint against the real
     # District 13 draft, which completed after the corpus was harvested.

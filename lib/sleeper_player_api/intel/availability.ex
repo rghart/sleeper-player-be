@@ -78,7 +78,8 @@ defmodule SleeperPlayerApi.Intel.Availability do
     current_pick = input[:at_pick] || next_pick(input.picks_made)
     last_pick = input.teams * input.rounds
 
-    with {:ok, board_rosters} <-
+    with :ok <- check_range(input[:at_pick], last_pick),
+         {:ok, board_rosters} <-
            PickOwnership.resolve_board(
              # `//1` is load-bearing: a bare `a..b` where a > b silently
              # becomes a DESCENDING range. Once a draft finishes,
@@ -142,6 +143,26 @@ defmodule SleeperPlayerApi.Intel.Availability do
        }}
     end
   end
+
+  # Only an explicitly asked-for pick is range-checked; the derived one is
+  # `last_pick + 1` at most, by construction.
+  #
+  # The accepted range is `1..last_pick + 1`, one past the end on purpose:
+  # that is what a finished draft reports as its own `current_pick`, and
+  # the frontend's pick selector echoes the response's `currentPick` back
+  # as `at_pick`. Refusing it would 422 every completed draft.
+  #
+  # Without this, `at_pick=999` was a 200 carrying an empty board and
+  # empty `byPick` — the UI renders that as "no read", which is honest
+  # about the answer but hides that the question was nonsense. Below 1 it
+  # did fail, but as `{:unmapped_slot, 0}` raised by `PickOwnership` for
+  # draft slot 0, which describes an internal lookup rather than the
+  # caller's mistake.
+  defp check_range(nil, _last_pick), do: :ok
+
+  defp check_range(at_pick, last_pick) when at_pick in 1..(last_pick + 1)//1, do: :ok
+
+  defp check_range(at_pick, last_pick), do: {:error, {:pick_out_of_range, at_pick, last_pick}}
 
   defp next_pick([]), do: 1
   defp next_pick(picks_made), do: (picks_made |> Enum.map(& &1.pick_no) |> Enum.max()) + 1
