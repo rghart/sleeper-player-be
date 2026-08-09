@@ -26,6 +26,11 @@ defmodule SleeperPlayerApi.Intel.Availability do
   correctness violation, so it still returns `{:ok, response}` with
   `targets: []` and `corpusDrafts: 0` rather than erroring — the board
   (trade resolution) doesn't depend on the corpus at all.
+
+  An `at_pick` outside the draft is also a hard failure —
+  `{:error, {:pick_out_of_range, at_pick, last_pick}}` — for the same
+  reason in a smaller way: the empty board and empty `byPick` it used to
+  produce are indistinguishable from an honest "nothing left to read".
   """
 
   alias SleeperPlayerApi.Intel.{Estimator, PickOwnership}

@@ -963,7 +963,9 @@ defmodule SleeperPlayerApi.Intel do
     * `:user_id` (required) — whose remaining picks are "mine"
     * `:at_pick` — analyze as if the draft were currently at this pick
       instead of its actual next open one (plan §3g hypotheticals).
-      Defaults to the draft's actual next pick.
+      Defaults to the draft's actual next pick. Must be within
+      `1..(teams * rounds) + 1` — see `Availability.build/1` on why the
+      range runs one past the final pick.
     * `:limit` — how many corpus players become `targets` (default 20, or
       the length of `:player_ids` when that is given)
     * `:player_ids` — restrict `targets` to these players (plan §6 step 3).
@@ -1006,9 +1008,9 @@ defmodule SleeperPlayerApi.Intel do
 
   Returns `{:ok, response}`, `{:error, :draft_not_found}` if `draft_id`
   isn't stored and can't be fetched from Sleeper either, or `{:error,
-  reason}` from `Availability.build/1` (an unresolvable draft type — see
-  its moduledoc on why that's a hard failure rather than a degraded
-  response).
+  reason}` from `Availability.build/1` (an unresolvable draft type, or an
+  `:at_pick` outside the draft — see its moduledoc on why both are hard
+  failures rather than degraded responses).
   """
   @spec availability(integer | String.t(), keyword) :: {:ok, map} | {:error, term}
   def availability(draft_id, opts \\ []) do
