@@ -31,6 +31,11 @@ defmodule SleeperPlayerApiWeb.ManagerActivityJSON do
       id: t.id,
       leagueId: t.league_id,
       week: t.week,
+      # Which roster is *theirs* in this transaction's league. `adds`/`drops`
+      # are league-wide, so without this a trade renders the same player as
+      # both added and dropped - seen against live data as
+      # "+Marvin Harrison -Marvin Harrison".
+      rosterId: Map.get(t, :roster_id),
       type: t.type,
       # `"failed"` rows are served, not filtered. A failed waiver claim is a
       # revealed preference nobody else in that league can see; the client
