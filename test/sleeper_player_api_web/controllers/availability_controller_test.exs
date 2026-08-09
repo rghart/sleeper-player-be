@@ -543,6 +543,84 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
     end
   end
 
+  describe "GET /api/v1/drafts/:draft_id/availability — per-manager ownership" do
+    @describetag :corpus
+
+    setup %{bypass: bypass} do
+      seed_corpus_from_json!()
+      seed_target_players!()
+      stub_district_13(bypass)
+      :ok
+    end
+
+    test "carries owns/ofLeagues alongside the draft read", %{conn: conn} do
+      # ryangh holds this player in 2 of the 3 leagues we have rosters for.
+      # The third roster is his and does not hold him, which is what makes
+      # the denominator a real 3 rather than "however many we looked at".
+      ryangh = String.to_integer(@ryangh_user_id)
+      player_id = "13353"
+
+      seed_rosters!([
+        {901, 1, ryangh, [player_id, "6786"]},
+        {902, 1, ryangh, [player_id]},
+        {903, 1, ryangh, ["6786"]}
+      ])
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=#{player_id}"
+        )
+
+      assert [target] = json_response(conn, 200)["targets"]
+      assert entry = Enum.find(target["perManager"], &(&1["manager"] == "ryangh"))
+
+      assert entry["owns"] == 2
+      assert entry["ofLeagues"] == 3
+    end
+
+    test "a manager who owns him but never drafted him still appears", %{conn: conn} do
+      # atekipp has drafts in this corpus, so if he shows up for a player he
+      # never took, it is the roster data putting him there.
+      player_id = "13353"
+      atekipp = 859_581_197_427_257_344
+
+      seed_rosters!([{904, 1, atekipp, [player_id]}])
+
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=#{player_id}"
+        )
+
+      assert [target] = json_response(conn, 200)["targets"]
+      entry = Enum.find(target["perManager"], &(&1["manager"] == "atekipp"))
+
+      refute is_nil(entry), "a manager who owns him must be listed even with no picks"
+      assert entry["owns"] == 1
+      assert entry["ofLeagues"] == 1
+      assert entry["times"] == 0
+      assert entry["adp"] == nil
+      assert entry["picks"] == []
+    end
+
+    test "with no roster data at all, ofLeagues is null rather than zero", %{conn: conn} do
+      conn =
+        get(
+          conn,
+          ~p"/api/v1/drafts/#{@draft_id}/availability?user_id=#{@ryangh_user_id}&player_ids=13353"
+        )
+
+      assert [target] = json_response(conn, 200)["targets"]
+      assert target["perManager"] != []
+
+      for entry <- target["perManager"] do
+        assert entry["owns"] == 0
+        assert entry["ofLeagues"] == nil, "0 of 0 is not a fact about anybody"
+      end
+    end
+  end
+
   describe "GET /api/v1/drafts/:draft_id/availability — at_pick out of range" do
     # Needs the draft itself (48 picks) to know what "out of range" means,
     # so unlike the parse-level validation above these go through the stubs.
@@ -743,6 +821,28 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
     |> Enum.sort_by(fn {_id, count} -> -count end)
     |> Enum.map(fn {id, _count} -> id end)
     |> Enum.take(25)
+  end
+
+  # `{league_id, roster_id, owner_id, player_ids}`. The leagues have to exist
+  # first: `observed_rosters.league_id` is a real FK, which is what stops a
+  # roster row outliving the league it describes.
+  defp seed_rosters!(rows) do
+    rows
+    |> Enum.map(fn {league_id, _, _, _} -> %{id: league_id, season: "2026"} end)
+    |> Enum.uniq()
+    |> Intel.upsert_observed_leagues()
+
+    Intel.upsert_observed_rosters(
+      Enum.map(rows, fn {league_id, roster_id, owner_id, player_ids} ->
+        %{
+          league_id: league_id,
+          roster_id: roster_id,
+          owner_id: owner_id,
+          player_ids: player_ids,
+          fetched_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        }
+      end)
+    )
   end
 
   defp seed_users_only! do

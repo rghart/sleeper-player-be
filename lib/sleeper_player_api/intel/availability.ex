@@ -62,7 +62,11 @@ defmodule SleeperPlayerApi.Intel.Availability do
         candidate_lookup: %{String.t() => %{name: String.t() | nil, position: String.t() | nil}},
         market_rank: %{String.t() => pos_integer},
         raw_picks: %{{String.t(), String.t()} => [String.t()]},
-        eligible_ids: MapSet.t(String.t()) | nil    # optional; see "Which players become targets?" below
+        eligible_ids: MapSet.t(String.t()) | nil,   # optional; see "Which players become targets?" below
+        ownership: %{                               # optional; see `per_manager/2`
+          owns: %{{String.t(), String.t()} => pos_integer},
+          leagues: %{String.t() => pos_integer}
+        }
       }
 
   ## Which players become `targets`? (plan §3f step 4 — underspecified)
@@ -295,20 +299,41 @@ defmodule SleeperPlayerApi.Intel.Availability do
   # Per-manager ADP + "notable" (plan §3 Frontend / §4e-bis)
   # ---------------------------------------------------------------------
 
+  # An entry appears when a manager has *either* drafted the player or owns
+  # him somewhere now. Those two populations barely overlap: measured
+  # 2026-08-09 across the real corpus, 94% of (manager, player) ownership
+  # pairs never appear in a crawled draft at all, because the player arrived
+  # by trade or waiver or in a league whose draft was never crawled. Listing
+  # only the drafters would drop most of what the rosters know.
+  #
+  # `adp`/`picks` stay nil/[] for an ownership-only entry rather than being
+  # faked from the ownership count — the draft read and the holdings read are
+  # different questions and §4e-bis's whole point is not to conflate two
+  # numbers that look alike.
   defp per_manager(input, player_id) do
-    for manager <- Enum.sort(MapSet.to_list(known_managers(input))),
+    ownership = Map.get(input, :ownership, %{owns: %{}, leagues: %{}})
+    managers = Enum.sort(MapSet.to_list(known_managers(input)))
+
+    # `of_leagues` is deliberately NOT bound as a comprehension filter. An
+    # assignment used as a filter drops the row when the value is falsy, and
+    # this one is nil for any manager we hold no roster data for — which
+    # silently removed managers who had drafted the player from the list
+    # entirely. It is read in the body instead, where nil is just nil.
+    for manager <- managers,
         took = Estimator.manager_took(input.corpus, manager, player_id),
-        took > 0 do
+        owns = Map.get(ownership.owns, {manager, player_id}, 0),
+        took > 0 or owns > 0 do
       seen = Estimator.manager_seen(input.corpus, manager)
       events = manager_events(input.corpus, manager, player_id)
-      adp = Enum.sum(events) / length(events)
 
       %{
         manager: manager,
         times: took,
         of: seen,
-        adp: round1(adp),
-        picks: raw_picks_for(input, manager, player_id)
+        adp: if(events == [], do: nil, else: round1(Enum.sum(events) / length(events))),
+        picks: raw_picks_for(input, manager, player_id),
+        owns: owns,
+        of_leagues: Map.get(ownership.leagues, manager)
       }
     end
     |> Enum.sort_by(& &1.manager)

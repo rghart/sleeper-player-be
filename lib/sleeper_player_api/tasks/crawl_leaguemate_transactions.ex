@@ -16,8 +16,13 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
   pattern that matters. Crossover is about three profile views.
 
   Measured cost of this crawl: 13 enumeration calls + 176 leagues, so **365
-  calls cold** (transactions plus roster maps) and **189 nightly** in the
-  offseason, roughly 73s and 38s at 300/min.
+  calls cold** (transactions plus rosters) and **~346 nightly** in the
+  offseason, roughly 73s and 69s at 300/min.
+
+  The nightly figure was 189 until rosters started being refetched every run
+  rather than cached for the season — see `ensure_roster_map/2`. That is the
+  price of a current answer to "how much of this player do they own"; the
+  cached roster list could only ever describe the first night we looked.
 
   ## Which weeks get fetched
 
@@ -215,13 +220,20 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
     %{summary | leagues_fetched: summary.leagues_fetched + 1}
   end
 
-  # Rosters are fetched once per league and kept: which user owns roster N
-  # does not change within a season, and refetching 176 of them nightly to
-  # learn nothing would be most of the crawl's budget.
-  defp ensure_roster_map(%ObservedLeague{roster_to_user: map}, summary)
-       when is_map(map) and map_size(map) > 0,
-       do: {map, summary}
-
+  # Rosters are fetched on **every** run, where they used to be fetched once
+  # and cached forever.
+  #
+  # The cache was right for what it stored: `roster_to_user` doesn't change
+  # within a season, so re-fetching 176 leagues nightly to relearn it would
+  # have been most of the crawl's budget for nothing. But the same payload's
+  # `players` is the opposite — it moves with every trade, waiver and
+  # free-agent add — and that is what per-manager ownership reads. A cached
+  # roster list would answer "who did he own the first night we looked",
+  # which is worse than no answer because it looks current.
+  #
+  # Measured cost: +154 calls on a warm run (176 leagues, 22 of which have no
+  # rosters yet), taking it from ~192 to ~346 against a 300/min limiter and
+  # Sleeper's documented 1000/min.
   defp ensure_roster_map(league, summary) do
     league_id = league && league.id
 
@@ -236,22 +248,43 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
             end
           end)
 
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
         Intel.upsert_observed_leagues([
-          %{
-            id: league_id,
-            roster_to_user: map,
-            rosters_fetched_at: DateTime.utc_now() |> DateTime.truncate(:second)
-          }
+          %{id: league_id, roster_to_user: map, rosters_fetched_at: now}
         ])
+
+        Intel.upsert_observed_rosters(roster_rows(league_id, rosters, now))
 
         {map, %{summary | rosters_fetched: summary.rosters_fetched + 1}}
 
       {{:error, reason}, summary} ->
         # Partial attribution beats none: without the map, `participants/2`
-        # still records the creator.
-        {%{}, add_error(summary, {:rosters_failed, league_id, reason})}
+        # still records the creator. A failed fetch leaves the previous
+        # roster rows in place rather than emptying them — a league Sleeper
+        # is briefly unhappy about should read as stale, not as "nobody owns
+        # anybody".
+        {stored_roster_map(league), add_error(summary, {:rosters_failed, league_id, reason})}
     end
   end
+
+  # `players` is null rather than [] for a roster nobody has filled yet, and
+  # Sleeper sends player ids as strings — which they must stay, per the
+  # 19-digit id rule that applies to every id this app touches.
+  defp roster_rows(league_id, rosters, now) do
+    for roster <- rosters, roster_id = roster["roster_id"], not is_nil(roster_id) do
+      %{
+        league_id: league_id,
+        roster_id: roster_id,
+        owner_id: to_int(roster["owner_id"]),
+        player_ids: Enum.map(roster["players"] || [], &to_string/1),
+        fetched_at: now
+      }
+    end
+  end
+
+  defp stored_roster_map(%ObservedLeague{roster_to_user: map}) when is_map(map), do: map
+  defp stored_roster_map(_), do: %{}
 
   defp fetch_week(league_id, week, roster_map, summary) do
     case request("/league/#{league_id}/transactions/#{week}", summary) do

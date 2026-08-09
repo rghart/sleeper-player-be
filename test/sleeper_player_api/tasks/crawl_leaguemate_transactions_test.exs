@@ -5,7 +5,7 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
   use SleeperPlayerApi.DataCase, async: false
 
   alias SleeperPlayerApi.Intel
-  alias SleeperPlayerApi.Intel.{ObservedLeague, ObservedTransaction}
+  alias SleeperPlayerApi.Intel.{ObservedLeague, ObservedRoster, ObservedTransaction}
   alias SleeperPlayerApi.Repo
   alias SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions
 
@@ -70,17 +70,18 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
       end)
     end
 
+    # `players` is what per-manager ownership reads. Sleeper sends the ids as
+    # strings and omits the key entirely for an unfilled roster, so the
+    # default here carries both shapes.
+    rosters =
+      Keyword.get(opts, :rosters, [
+        %{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034", "6794"]},
+        %{"roster_id" => 2, "owner_id" => "#{@bob}", "players" => ["4034"]}
+      ])
+
     Bypass.stub(bypass, "GET", "/league/900/rosters", fn conn ->
       :counters.add(counts, 1, 1)
-
-      Plug.Conn.resp(
-        conn,
-        200,
-        Jason.encode!([
-          %{"roster_id" => 1, "owner_id" => "#{@alice}"},
-          %{"roster_id" => 2, "owner_id" => "#{@bob}"}
-        ])
-      )
+      Plug.Conn.resp(conn, 200, Jason.encode!(rosters))
     end)
 
     for {w, txs} <- weeks do
@@ -165,11 +166,26 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
   end
 
   describe "the second run" do
-    test "makes far fewer calls, and does not refetch the roster map", %{bypass: bypass} do
-      # The §3f-style checkpoint for this step. Rosters are the saving: which
-      # user owns roster N never changes within a season, so refetching 176
-      # of them nightly would be most of the budget.
-      counts = stub(bypass, week_transactions: %{1 => [tx(1, creator: @alice)]})
+    test "makes far fewer calls, but does refetch the rosters", %{bypass: bypass} do
+      # The §3f-style checkpoint for this step. This used to assert the
+      # opposite — that a warm run never refetches rosters — which was right
+      # while the only thing read out of that payload was `roster_to_user`,
+      # a value that cannot change within a season.
+      #
+      # It now also carries `players`, which changes with every trade, waiver
+      # and free-agent add. A cached roster list answers "who did he own the
+      # first night we looked", which is worse than no answer because it
+      # looks current. Measured cost of the change: ~192 calls to ~346.
+      #
+      # The saving is now entirely in the settled weeks, so this runs at week
+      # 3 rather than week 1: with one league in the offseason there is one
+      # live week and nothing else to skip, and a warm run legitimately costs
+      # exactly what a cold one does.
+      counts =
+        stub(bypass,
+          current_week: 3,
+          week_transactions: %{1 => [tx(1, creator: @alice)], 2 => [], 3 => []}
+        )
 
       assert {:ok, first} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
       cold = :counters.get(counts, 1)
@@ -178,8 +194,8 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
       warm = :counters.get(counts, 1) - cold
 
       assert first.rosters_fetched == 1
-      assert second.rosters_fetched == 0, "a second run must not refetch a roster map"
-      assert warm < cold
+      assert second.rosters_fetched == 1, "roster contents go stale and must be refetched"
+      assert warm < cold, "the week/league dedupe still has to save most of the budget"
 
       # Re-storing the same live week upserts rather than duplicating.
       assert Repo.aggregate(ObservedTransaction, :count) == 1
@@ -194,6 +210,117 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
 
       assert second.weeks_fetched == 1, "week 1 is live and must come back every run"
       assert :counters.get(counts, 1) > before
+    end
+  end
+
+  describe "roster contents (per-manager ownership)" do
+    test "stores who is on each roster, as strings, from the crawl itself", %{bypass: bypass} do
+      stub(bypass)
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      rows = Repo.all(from(r in ObservedRoster, order_by: r.roster_id))
+
+      assert [%{roster_id: 1, owner_id: @alice, player_ids: ["4034", "6794"]}, %{roster_id: 2}] =
+               rows
+
+      assert Enum.all?(rows, &(&1.league_id == 900))
+      assert Enum.all?(rows, &(&1.fetched_at != nil))
+    end
+
+    test "a roster with no players yet stores an empty list, not a null", %{bypass: bypass} do
+      stub(bypass,
+        rosters: [
+          %{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => nil},
+          %{"roster_id" => 2, "owner_id" => "#{@bob}"}
+        ]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      assert Repo.all(from(r in ObservedRoster, select: r.player_ids)) == [[], []]
+    end
+
+    # The whole point of refetching. A cached list would keep reporting a
+    # player his manager has already traded away.
+    test "a dropped player stops being owned on the next run", %{bypass: bypass} do
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034", "6794"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      assert {%{{@alice, "6794"} => 1}, _} = Intel.ownership(["6794"])
+
+      Bypass.down(bypass)
+      bypass = Bypass.open(port: bypass.port)
+
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      assert {ownership, _} = Intel.ownership(["6794"])
+      assert ownership == %{}, "ownership must be able to go down as well as up"
+    end
+
+    test "a failed roster fetch leaves the previous contents alone", %{bypass: bypass} do
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      Bypass.down(bypass)
+      bypass = Bypass.open(port: bypass.port)
+      stub(bypass)
+      Bypass.stub(bypass, "GET", "/league/900/rosters", &Plug.Conn.resp(&1, 500, "nope"))
+
+      assert {:ok, summary} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      assert [{:rosters_failed, 900, _}] = summary.errors
+
+      assert {%{{@alice, "4034"} => 1}, _} = Intel.ownership(["4034"]),
+             "a brief Sleeper failure must read as stale, not as 'nobody owns anybody'"
+    end
+  end
+
+  describe "ownership/1" do
+    test "counts leagues per manager per player, and gives an honest denominator", %{
+      bypass: bypass
+    } do
+      stub(bypass,
+        leagues_for: %{@alice => ["900", "901"], @bob => ["900"]},
+        rosters: [
+          %{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034"]},
+          %{"roster_id" => 2, "owner_id" => "#{@bob}", "players" => []}
+        ]
+      )
+
+      # League 901 answers with rosters nobody has filled — the case that
+      # made every production figure read 13% low when it was counted.
+      Bypass.stub(bypass, "GET", "/league/901/rosters", fn conn ->
+        Plug.Conn.resp(
+          conn,
+          200,
+          Jason.encode!([%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => []}])
+        )
+      end)
+
+      Bypass.stub(bypass, "GET", "/league/901/transactions/1", &Plug.Conn.resp(&1, 200, "[]"))
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      assert {ownership, leagues_seen} = Intel.ownership()
+      assert ownership == %{{@alice, "4034"} => 1}
+
+      assert leagues_seen == %{@alice => 1},
+             "an empty league is one we cannot see into, not one he owns nobody in"
+    end
+
+    test "narrowing by player_ids does not narrow the denominators", %{bypass: bypass} do
+      stub(bypass)
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      assert {ownership, leagues_seen} = Intel.ownership(["6794"])
+      assert ownership == %{{@alice, "6794"} => 1}
+      assert leagues_seen == %{@alice => 1, @bob => 1}
     end
   end
 
