@@ -56,9 +56,11 @@ defmodule SleeperPlayerApiWeb.IntelControllerTest do
       body = json_response(conn, 200)
 
       assert %{"managers" => managers, "corpus" => corpus} = body
-      assert Enum.map(managers, & &1["userId"]) == [100, 200]
+      # Strings: Sleeper ids exceed JavaScript's safe integer range, so the
+      # API sends them as strings rather than let JSON.parse round them.
+      assert Enum.map(managers, & &1["userId"]) == ["100", "200"]
 
-      alice = Enum.find(managers, &(&1["userId"] == 100))
+      alice = Enum.find(managers, &(&1["userId"] == "100"))
       assert alice["displayName"] == "alice"
       assert is_integer(alice["leaguesCount"])
       assert is_integer(alice["draftsCount"])
@@ -89,7 +91,7 @@ defmodule SleeperPlayerApiWeb.IntelControllerTest do
       conn = get(conn, ~p"/api/v1/leagues/555/intel?season=2026")
       body = json_response(conn, 200)
 
-      carol = Enum.find(body["managers"], &(&1["userId"] == 300))
+      carol = Enum.find(body["managers"], &(&1["userId"] == "300"))
       assert carol["displayName"] == "carol"
       assert carol["draftsCount"] == 0
       assert carol["leaguesCount"] == 0

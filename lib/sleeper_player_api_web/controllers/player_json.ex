@@ -34,19 +34,20 @@ defmodule SleeperPlayerApiWeb.PlayerJSON do
       id: player.id,
       active: player.active,
       age: player.age,
-      fantasy_positions: Enum.map(Map.get(player, :fantasy_positions, []), fn p -> p.abbreviation end),
+      fantasy_positions:
+        Enum.map(Map.get(player, :fantasy_positions, []), fn p -> p.abbreviation end),
       first_name: player.first_name,
       last_name: player.last_name,
       full_name: player.full_name,
       player_id: player.player_id,
-      position: (if player.position, do: player.position.abbreviation, else: nil),
+      position: if(player.position, do: player.position.abbreviation, else: nil),
       search_first_name: player.search_first_name,
       search_last_name: player.search_last_name,
       search_full_name: player.search_full_name,
       search_rank: player.search_rank,
-      status: (if player.status, do: player.status.status, else: nil),
+      status: if(player.status, do: player.status.status, else: nil),
       years_exp: player.years_exp,
-      team: (if player.team, do: player.team.abbreviation, else: nil)
+      team: if(player.team, do: player.team.abbreviation, else: nil)
     }
   end
 end

@@ -56,7 +56,7 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
 
     body = conn |> get(~p"/api/v1/users/#{@alice}/activity?season=2026") |> json_response(200)
 
-    assert Enum.map(body["transactions"], & &1["id"]) == [2, 1]
+    assert Enum.map(body["transactions"], & &1["id"]) == ["2", "1"]
     assert [%{"type" => "waiver", "waiverBid" => 12} | _] = body["transactions"]
 
     # Coverage travels with the transactions, always — "2 transactions" means
@@ -73,7 +73,8 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
 
     body = conn |> get(~p"/api/v1/users/#{@bob}/activity") |> json_response(200)
 
-    assert [%{"id" => 1, "creator" => @alice}] = body["transactions"]
+    assert [%{"id" => "1", "creator" => creator}] = body["transactions"]
+    assert creator == to_string(@alice)
   end
 
   test "serves failed transactions rather than hiding them", %{conn: conn} do
@@ -157,7 +158,7 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
     ])
 
     typed = conn |> get(~p"/api/v1/users/#{@alice}/activity?types=trade") |> json_response(200)
-    assert Enum.map(typed["transactions"], & &1["id"]) == [1]
+    assert Enum.map(typed["transactions"], & &1["id"]) == ["1"]
 
     capped = conn |> get(~p"/api/v1/users/#{@alice}/activity?limit=1") |> json_response(200)
     assert length(capped["transactions"]) == 1
@@ -172,6 +173,31 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
     assert body["coverage"]["leaguesSeen"] == 0
     # Not a member of anything we know about, so the denominator is theirs: 0.
     assert body["coverage"]["leaguesKnown"] == 0
+  end
+
+  test "sends ids as strings, because Sleeper ids exceed JavaScript's safe integer range", %{
+    conn: conn
+  } do
+    # 859581197427257344 parses as ...257300 in JSON. Invisible while an id is
+    # only compared to itself, and fatal the moment one is used to call
+    # another endpoint - which is what happened when the Leaguemates profile
+    # started requesting this one with a userId from /intel.
+    big = 859_581_197_427_257_344
+
+    Intel.upsert_observed_leagues([
+      %{id: 902, name: "Big", season: "2026", roster_to_user: %{"1" => big}}
+    ])
+
+    Intel.upsert_league_members([%{league_id: 902, user_id: big}])
+    seed([tx(1_390_152_751_601_713_152, %{league_id: 902, creator: big, participant_ids: [big]})])
+
+    body = conn |> get(~p"/api/v1/users/#{big}/activity") |> json_response(200)
+
+    assert [t] = body["transactions"]
+    assert t["id"] == "1390152751601713152"
+    assert t["creator"] == "859581197427257344"
+    assert t["participantIds"] == ["859581197427257344"]
+    assert t["leagueId"] == "902"
   end
 
   test "a non-numeric limit is a 422, not a 500", %{conn: conn} do

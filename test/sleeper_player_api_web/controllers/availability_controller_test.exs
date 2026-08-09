@@ -47,7 +47,7 @@ defmodule SleeperPlayerApiWeb.AvailabilityControllerTest do
       body = json_response(conn, 200)
 
       assert body["league"] == "District 13 Dynasty League"
-      assert body["draftId"] == String.to_integer(@draft_id)
+      assert body["draftId"] == @draft_id
       assert body["currentPick"] == 35
       assert body["lastPick"] == 48
       assert body["teams"] == 12
