@@ -19,7 +19,31 @@ config :sleeper_player_api, SleeperPlayerApiWeb.Endpoint,
     layout: false
   ],
   pubsub_server: SleeperPlayerApi.PubSub,
-  live_view: [signing_salt: "D+bR61pb"]
+  live_view: [signing_salt: "D+bR61pb"],
+  # Compress responses. Cowboy's own stream handler does it, because there
+  # is no reverse proxy in front of this app — it is `plug_cowboy` talking
+  # to the internet directly (`Plug.Static`'s `gzip: false` was never
+  # relevant: that only ever served pre-compressed *static* files, and
+  # every response here is dynamic JSON).
+  #
+  # It has to be `compress: true`, NOT
+  # `protocol_options: [stream_handlers: [:cowboy_compress_h, ...]]`.
+  # `:stream_handlers` is a top-level `Plug.Cowboy` option, not a Cowboy
+  # protocol option, and `Plug.Cowboy.args/4` merges its own default
+  # handlers *over* anything nested under `:protocol_options`. The nested
+  # form compiles, boots, and silently does nothing — verified by curling
+  # a 4 KB response and finding no `content-encoding` on it.
+  #
+  # Set on both listeners, not just https, because the http one is what
+  # answers before `force_ssl` redirects — and set here rather than in
+  # `prod.exs` so dev and prod compress alike. Phoenix deep-merges these
+  # keyword lists, so the per-environment `port`/`ip` entries survive, as
+  # does `SiteEncrypt.Phoenix.configure_https/1`'s cert merge.
+  #
+  # The measured effect on the endpoint that motivated this: 40,861 bytes
+  # to 4,511 for `/availability` at pick 1 with ten targets.
+  http: [compress: true],
+  https: [compress: true]
 
 # Configures the mailer
 #
