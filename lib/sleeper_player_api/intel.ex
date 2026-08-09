@@ -254,7 +254,7 @@ defmodule SleeperPlayerApi.Intel do
   """
   @spec manager_activity(integer | String.t(), keyword) :: map
   def manager_activity(user_id, opts \\ []) do
-    transactions = transactions_for_user(user_id, opts)
+    transactions = user_id |> transactions_for_user(opts) |> with_roster_ids(to_int(user_id))
 
     player_ids =
       transactions
@@ -376,6 +376,37 @@ defmodule SleeperPlayerApi.Intel do
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  # Which roster in each transaction's league belongs to this user.
+  #
+  # `adds`/`drops` are league-wide - a trade adds a player to one roster and
+  # drops him from another - so without this the same player renders as both
+  # added and dropped. Seen immediately against live data: a real trade came
+  # back as "+Marvin Harrison -Marvin Harrison", which reads as nonsense.
+  # With it the caller can show the move from *this* manager's side.
+  defp with_roster_ids([], _user_id), do: []
+
+  defp with_roster_ids(transactions, user_id) do
+    league_ids = transactions |> Enum.map(& &1.league_id) |> Enum.uniq()
+
+    roster_by_league =
+      ObservedLeague
+      |> where([l], l.id in ^league_ids)
+      |> select([l], {l.id, l.roster_to_user})
+      |> Repo.all()
+      |> Map.new(fn {id, map} ->
+        roster =
+          Enum.find_value(map || %{}, fn {roster_id, owner} ->
+            if to_int(owner) == user_id, do: to_int(roster_id)
+          end)
+
+        {id, roster}
+      end)
+
+    Enum.map(transactions, fn t ->
+      Map.put(t, :roster_id, Map.get(roster_by_league, t.league_id))
+    end)
   end
 
   @doc """

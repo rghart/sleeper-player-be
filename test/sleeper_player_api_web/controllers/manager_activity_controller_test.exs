@@ -116,6 +116,39 @@ defmodule SleeperPlayerApiWeb.ManagerActivityControllerTest do
     assert body["players"]["4001"]["position"] == "WR"
   end
 
+  test "says which roster is theirs, so a trade does not render both sides", %{conn: conn} do
+    # `adds`/`drops` are league-wide: a trade adds a player to one roster and
+    # drops him from another. Seen against live data as
+    # "+Marvin Harrison -Marvin Harrison", which reads as nonsense. alice is
+    # roster 1, bob roster 2.
+    seed([
+      tx(1, %{
+        type: "trade",
+        participant_ids: [@alice, @bob],
+        adds: %{"4001" => 1, "4002" => 2},
+        drops: %{"4001" => 2, "4002" => 1}
+      })
+    ])
+
+    alice = conn |> get(~p"/api/v1/users/#{@alice}/activity") |> json_response(200)
+    bob = conn |> get(~p"/api/v1/users/#{@bob}/activity") |> json_response(200)
+
+    assert [%{"rosterId" => 1}] = alice["transactions"]
+    assert [%{"rosterId" => 2}] = bob["transactions"]
+  end
+
+  test "leaves rosterId null when the league's roster map is unknown", %{conn: conn} do
+    # A league whose /rosters call failed still serves its transactions; the
+    # caller shows the move unsided rather than showing nothing.
+    Intel.upsert_observed_leagues([%{id: 901, name: "No map", season: "2026"}])
+    Intel.upsert_league_members([%{league_id: 901, user_id: @alice}])
+    seed([tx(9, %{league_id: 901})])
+
+    body = conn |> get(~p"/api/v1/users/#{@alice}/activity") |> json_response(200)
+
+    assert [%{"rosterId" => nil}] = body["transactions"]
+  end
+
   test "narrows by type and caps at a limit", %{conn: conn} do
     seed([
       tx(1, %{type: "trade", created: ~U[2026-08-01 12:00:00Z]}),
