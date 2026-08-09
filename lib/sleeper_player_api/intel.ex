@@ -40,7 +40,10 @@ defmodule SleeperPlayerApi.Intel do
     ObservedPick,
     ObservedTradedPick,
     PlayerValue,
-    DraftParticipant
+    DraftParticipant,
+    ObservedLeague,
+    ObservedTransaction,
+    LeagueMember
   }
 
   @batch_size 1000
@@ -230,6 +233,236 @@ defmodule SleeperPlayerApi.Intel do
         :draft_year
       ]
     )
+  end
+
+  @doc """
+  One manager's recent activity, plus what it rests on.
+
+  Bundles `transactions_for_user/2` with `transaction_coverage/2` and the
+  names behind the player ids in `adds`/`drops`, so the caller renders from
+  one response.
+
+  **`coverage` travels with the transactions, always.** A list of five trades
+  means something different across 42 leagues than across 4, and this feature
+  has shipped a figure that outran its sample size four separate times. The
+  two are returned together so a caller cannot render one without the other
+  being available.
+
+  Names are resolved here rather than left to the client for the same reason
+  `/intel` resolves crush names: the section that renders this has no player
+  database of its own.
+  """
+  @spec manager_activity(integer | String.t(), keyword) :: map
+  def manager_activity(user_id, opts \\ []) do
+    transactions = transactions_for_user(user_id, opts)
+
+    player_ids =
+      transactions
+      |> Enum.flat_map(fn t -> Map.keys(t.adds || %{}) ++ Map.keys(t.drops || %{}) end)
+      |> Enum.uniq()
+
+    %{
+      transactions: transactions,
+      players: player_lookup(player_ids),
+      coverage: transaction_coverage(user_id, opts)
+    }
+  end
+
+  # ---------------------------------------------------------------------
+  # Transactions (plan §6 step 6)
+  # ---------------------------------------------------------------------
+
+  @doc """
+  Upserts leagues by Sleeper league id.
+
+  `roster_to_user` is stored as given (string roster-id keys, since it
+  round-trips as jsonb) and is only replaced when the caller actually
+  supplies one — a crawl that fetched transactions but not rosters must not
+  blank out a map an earlier pass already stored.
+  """
+  @spec upsert_observed_leagues([map]) :: {non_neg_integer, nil}
+  def upsert_observed_leagues(leagues) do
+    insert_all_batched(
+      ObservedLeague,
+      leagues,
+      conflict_target: [:id],
+      on_conflict:
+        from(l in ObservedLeague,
+          update: [
+            set: [
+              name: fragment("COALESCE(EXCLUDED.name, ?)", l.name),
+              season: fragment("COALESCE(EXCLUDED.season, ?)", l.season),
+              roster_to_user: fragment("COALESCE(EXCLUDED.roster_to_user, ?)", l.roster_to_user),
+              rosters_fetched_at:
+                fragment("COALESCE(EXCLUDED.rosters_fetched_at, ?)", l.rosters_fetched_at),
+              transactions_fetched_through:
+                fragment(
+                  "GREATEST(COALESCE(EXCLUDED.transactions_fetched_through, 0), COALESCE(?, 0))",
+                  l.transactions_fetched_through
+                )
+            ]
+          ]
+        )
+    )
+  end
+
+  @doc """
+  Records which tracked leaguemates are in which leagues. Idempotent.
+  """
+  @spec upsert_league_members([map]) :: {non_neg_integer, nil}
+  def upsert_league_members(memberships) do
+    insert_all_batched(
+      LeagueMember,
+      Enum.uniq(memberships),
+      conflict_target: [:league_id, :user_id],
+      on_conflict: :nothing
+    )
+  end
+
+  @doc """
+  Upserts transactions by Sleeper transaction id.
+
+  Keyed on the transaction's own id rather than a synthetic one because a
+  *live* week is refetched repeatedly — in the offseason every transaction
+  lands in week 1 and week 1 never closes, so the same rows come back nightly
+  for months. Anything else would duplicate.
+  """
+  @spec upsert_observed_transactions([map]) :: {non_neg_integer, nil}
+  def upsert_observed_transactions(transactions) do
+    insert_all_batched(
+      ObservedTransaction,
+      transactions,
+      conflict_target: [:id],
+      replace: [
+        :league_id,
+        :week,
+        :type,
+        :status,
+        :created,
+        :creator,
+        :participant_ids,
+        :adds,
+        :drops,
+        :draft_picks,
+        :waiver_bid
+      ]
+    )
+  end
+
+  @doc """
+  Resolves the roster ids on a raw transaction payload to the user ids behind
+  them, using a league's `roster_to_user` map.
+
+  This is the whole reason `observed_leagues` exists. `creator` is a *user*
+  id; `roster_ids` and `consenter_ids` are *roster* ids. Attributing a trade
+  only to its creator drops the manager who accepted it, and trades are both
+  the rarest transaction type and the most interesting — so the undercount
+  would be invisible and would lose exactly the wrong half.
+
+  The creator is always included, even when their roster is missing from the
+  map (a league whose rosters have not been fetched yet still yields partial
+  attribution rather than none).
+  """
+  @spec participants(map, map) :: [integer]
+  def participants(raw, roster_to_user) do
+    from_rosters =
+      raw
+      |> Map.get("roster_ids", [])
+      |> Enum.map(&Map.get(roster_to_user, to_string(&1)))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&to_int/1)
+
+    [to_int(raw["creator"]) | from_rosters]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc """
+  Every stored transaction a user was involved in, newest first.
+
+  Reads `participant_ids`, not `creator` — see `participants/2`.
+
+  `:limit` caps the rows; `:season` scopes to one season's leagues; `:types`
+  narrows to particular transaction types. `status: "failed"` rows are
+  included by default and it is deliberate: a failed waiver claim is a
+  revealed preference nobody else in that league can see. Filter it where it
+  is displayed, with a label, not here.
+  """
+  @spec transactions_for_user(integer | String.t(), keyword) :: [ObservedTransaction.t()]
+  def transactions_for_user(user_id, opts \\ []) do
+    user_id = to_int(user_id)
+    limit = Keyword.get(opts, :limit, 50)
+
+    ObservedTransaction
+    |> where([t], ^user_id in t.participant_ids)
+    |> then(fn q ->
+      case Keyword.get(opts, :types) do
+        nil -> q
+        types -> where(q, [t], t.type in ^types)
+      end
+    end)
+    |> then(fn q ->
+      case Keyword.get(opts, :season) do
+        nil ->
+          q
+
+        season ->
+          join(q, :inner, [t], l in ObservedLeague,
+            on: l.id == t.league_id and l.season == ^season
+          )
+      end
+    end)
+    |> order_by([t], desc: t.created, desc: t.id)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  @doc """
+  How much of a user's activity the store can actually see: how many leagues
+  hold a transaction of theirs, and how many leagues are known at all.
+
+  This is what the endpoint reports as `coverage`. A fan-out that saw 38 of 42
+  leagues and reports "5 trades" is a figure without its sample size, which is
+  the error this feature keeps re-learning.
+  """
+  @spec transaction_coverage(integer | String.t(), keyword) :: map
+  def transaction_coverage(user_id, opts \\ []) do
+    user_id = to_int(user_id)
+    season = Keyword.get(opts, :season)
+
+    leagues_seen =
+      ObservedTransaction
+      |> where([t], ^user_id in t.participant_ids)
+      |> select([t], count(fragment("DISTINCT ?", t.league_id)))
+      |> Repo.one()
+
+    # *Their* leagues, not every league in the corpus. Comparing a manager's
+    # leagues-with-activity against the whole corpus reported "33 of 175" for
+    # someone who is in 42 — a denominator that describes nobody. Found by
+    # running the crawler against the live API; every fixture had one league,
+    # so nothing caught it.
+    known =
+      LeagueMember
+      |> where([m], m.user_id == ^user_id)
+      |> then(fn q ->
+        if season do
+          join(q, :inner, [m], l in ObservedLeague,
+            on: l.id == m.league_id and l.season == ^season
+          )
+        else
+          q
+        end
+      end)
+      |> select([m], count(m.league_id))
+      |> Repo.one()
+
+    last =
+      ObservedLeague
+      |> select([l], max(l.rosters_fetched_at))
+      |> Repo.one()
+
+    %{leagues_seen: leagues_seen || 0, leagues_known: known || 0, last_crawled_at: last}
   end
 
   defp insert_all_batched(schema, entries, opts) do
