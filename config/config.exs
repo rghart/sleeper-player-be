@@ -81,6 +81,22 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
       schedule: "0 9 * * *",
       task: {SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts, :crawl_configured_leagues, []},
       overlap: false
+    ],
+
+    # 4:30am Central — sweep leaguemate transactions. Last, because it is the
+    # heaviest: measured against the live API at 365 calls cold and 189 warm,
+    # against ~22 for a warm draft crawl. It runs after the draft sweep so the
+    # two never contend for the same rate-limit bucket.
+    #
+    # A warm run stays at 189 rather than dropping further because the
+    # offseason has no settled weeks: Sleeper files every offseason move under
+    # week 1 and week 1 never closes, so the live week comes back every night.
+    # That falls away once the season starts.
+    [
+      name: :crawl_leaguemate_transactions,
+      schedule: "30 9 * * *",
+      task: {SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions, :crawl_configured_leagues, []},
+      overlap: false
     ]
   ]
 
