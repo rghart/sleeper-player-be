@@ -18,6 +18,8 @@ defmodule SleeperPlayerApi.Application do
       {Finch, name: SleeperPlayerApi.Finch},
       # Start the shared Sleeper API rate limiter
       SleeperPlayerApi.RateLimiter,
+      # Start the market-value cache (owns its ETS table)
+      SleeperPlayerApi.Intel.MarketValuesCache,
       # Start the Endpoint (http/https)
       {SiteEncrypt.Phoenix, SleeperPlayerApiWeb.Endpoint},
       # Start Quantum scheduler

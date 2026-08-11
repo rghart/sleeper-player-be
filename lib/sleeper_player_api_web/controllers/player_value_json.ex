@@ -8,6 +8,11 @@ defmodule SleeperPlayerApiWeb.PlayerValueJSON do
   league are not slightly off, they are about a different game, and this
   feature's standing lesson is that the figure is fine and the sentence next
   to it overclaims. The caller needs this to write that sentence.
+
+  It echoes the settings that were *answered*, not the ones that were asked
+  for. Those differ whenever a param was omitted and fell back, which is the
+  common case - a caller sending only `num_teams` still needs to be told what
+  format and scoring it got.
   """
 
   @doc """
@@ -21,14 +26,14 @@ defmodule SleeperPlayerApiWeb.PlayerValueJSON do
   `market_rookie_class_entries/1` returning `[]` rather than inventing a
   market read.
   """
-  def index(%{values: values}) do
+  def index(%{values: values, settings: settings}) do
     %{
       settings: %{
         source: "fantasycalc",
-        format: "dynasty",
-        numQbs: 2,
-        numTeams: 12,
-        ppr: 1
+        format: if(settings.dynasty, do: "dynasty", else: "redraft"),
+        numQbs: settings.num_qbs,
+        numTeams: settings.num_teams,
+        ppr: settings.ppr
       },
       asOf: newest(values),
       values: Enum.map(values, &value/1)
