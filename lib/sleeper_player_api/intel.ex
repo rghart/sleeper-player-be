@@ -237,6 +237,44 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
+  The current market values for `source`, best player first.
+
+  Ordered by `overall_rank` because that is what the caller wants it for — a
+  ranking list is an order, and sorting 600 rows in the browser to recover an
+  order the database can hand over sorted is work for nothing. Rows with no
+  `overall_rank` sort last rather than first, which is what `NULLS LAST` is
+  doing here: Postgres orders nulls first on `ASC` by default, so without it
+  a player the feed has no opinion on would open the list.
+
+  No join to `players`. Every caller of this already has the whole player
+  database — the frontend downloads it for the draft board and the roster
+  view — so returning names here would ship a second copy of data the caller
+  is holding, to save it a map lookup. `player_id` is the join key and
+  FantasyCalc hands it over as a Sleeper id, which is the entire reason that
+  source was chosen (plan §2).
+
+  `as_of` travels per row rather than once for the batch: the refresh writes
+  the whole feed in one pass so they are equal in practice, but a partial
+  refresh is a thing that can happen and "the list is from Tuesday" should
+  not be inferred from one row on the caller's behalf.
+  """
+  @spec player_values(String.t()) :: [map]
+  def player_values(source) do
+    from(pv in PlayerValue,
+      where: pv.source == ^source,
+      order_by: [asc_nulls_last: pv.overall_rank],
+      select: %{
+        player_id: pv.player_id,
+        value: pv.value,
+        overall_rank: pv.overall_rank,
+        position_rank: pv.position_rank,
+        as_of: pv.as_of
+      }
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   One manager's recent activity, plus what it rests on.
 
   Bundles `transactions_for_user/2` with `transaction_coverage/2` and the
