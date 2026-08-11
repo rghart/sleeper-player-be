@@ -82,6 +82,47 @@ defmodule SleeperPlayerApiWeb.PlayerValueSettingsTest do
     end
   end
 
+  describe "a league with more quarterbacks than the provider prices" do
+    # Bypass is down: if this fetched, it would fail. FantasyCalc returns
+    # identical values for numQbs 2, 3 and 4, so a 12-team full-PPR dynasty
+    # league that starts three is asking the stored slice's question.
+    test "is answered from the stored slice with no fetch", %{conn: conn, bypass: bypass} do
+      Bypass.down(bypass)
+      stored(1, 1)
+
+      body = conn |> get(~p"/api/v1/values?num_qbs=3") |> json_response(200)
+
+      assert Enum.map(body["values"], & &1["playerId"]) == ["1"]
+    end
+
+    # Clamped on the way out, not on the way in - the caller's league really
+    # does start four, and the response describes their league.
+    test "still reports the caller's own quarterback count", %{conn: conn, bypass: bypass} do
+      Bypass.down(bypass)
+      stored(1, 1)
+
+      body = conn |> get(~p"/api/v1/values?num_qbs=4") |> json_response(200)
+
+      assert body["settings"]["numQbs"] == 4
+    end
+
+    test "shares one fetch and one cache entry with the two-QB question", %{
+      conn: conn,
+      bypass: bypass
+    } do
+      # Once, for both requests, despite the different num_qbs.
+      Bypass.expect_once(bypass, "GET", "/values/current", fn conn ->
+        assert conn.query_params["numQbs"] == "2"
+        Plug.Conn.resp(conn, 200, Jason.encode!([live_entry("77", 1)]))
+      end)
+
+      three = conn |> get(~p"/api/v1/values?num_qbs=3&num_teams=10") |> json_response(200)
+      four = conn |> get(~p"/api/v1/values?num_qbs=4&num_teams=10") |> json_response(200)
+
+      assert three["values"] == four["values"]
+    end
+  end
+
   describe "another league shape" do
     test "is fetched from the provider", %{conn: conn, bypass: bypass} do
       stored(1, 1)

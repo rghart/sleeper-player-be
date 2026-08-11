@@ -27,13 +27,40 @@ defmodule SleeperPlayerApi.Intel.MarketSettings do
   @max_teams 32
   @max_qbs 4
 
+  # The most quarterbacks FantasyCalc prices differently. Not a bound on what
+  # a caller may ask - `@max_qbs` is that - but the point past which asking
+  # for more returns the same answer. Must stay above its uses: a module
+  # attribute read before it is set is `nil`, and `min(4, nil)` is 4 in Erlang
+  # term order, so the clamp would silently do nothing.
+  @priced_qbs 2
+
   @doc "The slice the nightly refresh stores, and the default for a request."
   @spec default() :: t
   def default, do: @default
 
-  @doc "Whether these are the stored settings, and so answerable without a fetch."
+  @doc """
+  Whether these settings are answerable from the stored slice without a fetch.
+
+  Compares what the provider would actually be asked, not what the caller
+  said - so a 12-team full-PPR dynasty league that starts three quarterbacks
+  is the stored slice, because `effective/1` reads it as two and the values
+  are identical either way.
+  """
   @spec default?(t) :: boolean
-  def default?(settings), do: settings == @default
+  def default?(settings), do: effective(settings) == @default
+
+  # The settings as the provider will actually read them.
+  #
+  # FantasyCalc prices one quarterback or more-than-one, and nothing beyond:
+  # measured against the live API with everything else equal, `numQbs` of 2, 3
+  # and 4 return byte-identical values. So a league that starts four is asking
+  # the same question as one that starts two, and asking it under a different
+  # name buys nothing and costs a second request to somebody else's free API.
+  #
+  # Only what is *sent* is clamped. The settings a caller gets back still
+  # describe their league, because "you start four quarterbacks" is true and
+  # this is a fact about the provider rather than about them.
+  defp effective(settings), do: %{settings | num_qbs: min(settings.num_qbs, @priced_qbs)}
 
   @doc """
   Request params as settings, falling back to the stored slice field by field.
@@ -66,9 +93,17 @@ defmodule SleeperPlayerApi.Intel.MarketSettings do
     end
   end
 
-  @doc "These settings as FantasyCalc's query string."
+  @doc """
+  These settings as FantasyCalc's query string.
+
+  Clamped to what the provider actually prices - see `effective/1`. This
+  string is also the cache key, so the clamp is what stops a three-QB and a
+  four-QB league being two cached copies of one answer.
+  """
   @spec to_query(t) :: String.t()
-  def to_query(%{dynasty: dynasty, num_qbs: num_qbs, num_teams: num_teams, ppr: ppr}) do
+  def to_query(settings) do
+    %{dynasty: dynasty, num_qbs: num_qbs, num_teams: num_teams, ppr: ppr} = effective(settings)
+
     URI.encode_query(%{
       "isDynasty" => to_string(dynasty),
       "numQbs" => num_qbs,
