@@ -45,6 +45,19 @@ defmodule SleeperPlayerApiWeb.FallbackController do
     })
   end
 
+  # A query param read as a number but is not one this API will accept
+  # (`MarketSettings`' league-shape bounds). Separate from `:invalid_param`
+  # for the same reason `:pick_out_of_range` is: telling someone `999` is not
+  # an integer is a false statement about a perfectly good integer.
+  def call(conn, {:error, {:param_out_of_range, key, value, min, max}}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{
+      errors: %{detail: "#{key} must be between #{min} and #{max}, got: #{inspect(value)}"}
+    })
+  end
+
   # `at_pick` parsed as an integer but isn't a pick this draft has
   # (`SleeperPlayerApi.Intel.Availability.build/1`). The upper bound is
   # `last_pick + 1` because that is the `currentPick` a finished draft

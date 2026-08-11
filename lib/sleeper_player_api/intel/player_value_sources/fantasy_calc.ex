@@ -12,6 +12,7 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.FantasyCalc do
   @behaviour SleeperPlayerApi.Intel.PlayerValueSource
 
   alias SleeperPlayerApi.Client.FantasyCalc, as: Client
+  alias SleeperPlayerApi.Intel.MarketSettings
 
   @source "fantasycalc"
 
@@ -19,8 +20,19 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.FantasyCalc do
   def name, do: @source
 
   @impl true
-  def fetch_values do
-    case Client.get() do
+  def fetch_values, do: fetch_values(MarketSettings.default())
+
+  @doc """
+  The same fetch, for a league shape other than the stored one.
+
+  Separate from `fetch_values/0` rather than replacing it: the nightly
+  refresh writes exactly one slice and the availability model is calibrated
+  against it, so the behaviour callback must keep meaning that slice and
+  nothing else. This arity is for a caller asking about *their* league.
+  """
+  @spec fetch_values(MarketSettings.t()) :: {:ok, [map]} | {:error, term}
+  def fetch_values(settings) do
+    case Client.get("/values/current?" <> MarketSettings.to_query(settings)) do
       {:ok, entries} when is_list(entries) ->
         now = DateTime.utc_now() |> DateTime.truncate(:second)
         {:ok, entries |> Enum.flat_map(&shape_entry(&1, now))}
