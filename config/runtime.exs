@@ -6,6 +6,6 @@ https_port = System.get_env("HTTPS_PORT")
 
 if http_port && https_port do
   config :sleeper_player_api, SleeperPlayerApiWeb.Endpoint,
-         http: [port: String.to_integer(http_port)],
-         https: [port: String.to_integer(https_port)]
+    http: [port: String.to_integer(http_port)],
+    https: [port: String.to_integer(https_port)]
 end
