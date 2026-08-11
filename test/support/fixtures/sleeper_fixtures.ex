@@ -16,6 +16,7 @@ defmodule SleeperPlayerApi.SleeperFixtures do
   """
   def player_fixture(attrs \\ %{}) do
     Map.put(attrs, :id, unique_player_id())
+
     {:ok, player} =
       attrs
       |> Enum.into(%{
@@ -32,7 +33,7 @@ defmodule SleeperPlayerApi.SleeperFixtures do
         search_full_name: "some search_full_name",
         search_last_name: "some search_last_name",
         search_rank: 42,
-        years_exp: 42,
+        years_exp: 42
       })
       |> SleeperPlayerApi.Sleeper.create_player()
 

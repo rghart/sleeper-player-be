@@ -5,15 +5,15 @@ import Config
 # when generating URLs.
 
 config :sleeper_player_api, SleeperPlayerApiWeb.Endpoint,
-       url: [host: "fantasyteamassistant.com", port: 443],
-       server: true,
-       force_ssl: [hsts: true],
-       http: [port: 4000, transport_options: [socket_opts: [:inet6]]],
-       https: [
-         port: 4040,
-         cipher_suite: :strong,
-         transport_options: [socket_opts: [:inet6]]
-       ]
+  url: [host: "fantasyteamassistant.com", port: 443],
+  server: true,
+  force_ssl: [hsts: true],
+  http: [port: 4000, transport_options: [socket_opts: [:inet6]]],
+  https: [
+    port: 4040,
+    cipher_suite: :strong,
+    transport_options: [socket_opts: [:inet6]]
+  ]
 
 # Set path to cert folder
 config :sleeper_player_api, :cert_path, "/home/rhart/site_encrypt_db"
@@ -28,12 +28,11 @@ config :swoosh, api_client: Swoosh.ApiClient.Finch, finch_name: SleeperPlayerApi
 config :logger, level: :info
 
 config :cors_plug,
-       origin: [
-         ~r/^https:\/\/sleeper-player-db.*.web.app$/,
-         "https://sleeper-player-db.firebaseapp.com",
-         "https://fantasyteamassistant.com"
-       ]
-
+  origin: [
+    ~r/^https:\/\/sleeper-player-db.*.web.app$/,
+    "https://sleeper-player-db.firebaseapp.com",
+    "https://fantasyteamassistant.com"
+  ]
 
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

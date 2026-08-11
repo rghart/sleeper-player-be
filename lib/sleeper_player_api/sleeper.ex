@@ -53,7 +53,12 @@ defmodule SleeperPlayerApi.Sleeper do
 
   """
   def list_active_players do
-    Repo.all(from Player, where: [active: true], preload: ^@player_preloads, select: ^@all_fields_except_player_json)
+    Repo.all(
+      from Player,
+        where: [active: true],
+        preload: ^@player_preloads,
+        select: ^@all_fields_except_player_json
+    )
   end
 
   @doc """
@@ -164,11 +169,12 @@ defmodule SleeperPlayerApi.Sleeper do
     new_attrs = [
       {status, "status_id", &get_status_by_status/1, &create_status/1, :status},
       {team, "team_id", &get_team_by_abbreviation/1, &create_team/1, :abbreviation},
-      {position, "position_id", &get_position_by_abbreviation/1, &create_position/1, :abbreviation}
+      {position, "position_id", &get_position_by_abbreviation/1, &create_position/1,
+       :abbreviation}
     ]
 
-    attrs = Enum.reduce(new_attrs, attrs,
-      fn {attr, k, read_func, create_func, create_k}, attrs ->
+    attrs =
+      Enum.reduce(new_attrs, attrs, fn {attr, k, read_func, create_func, create_k}, attrs ->
         get_id = fn
           nil ->
             case create_func.(Map.put(%{}, create_k, attr)) do
@@ -179,18 +185,23 @@ defmodule SleeperPlayerApi.Sleeper do
           result ->
             Map.get(result, :id)
         end
+
         if attr, do: Map.put(attrs, k, get_id.(read_func.(attr))), else: attrs
-      end
-    )
+      end)
 
     player = Repo.preload(player, @player_preloads)
     changes = Player.changeset(player, attrs)
 
-    changes = if positions do
-      Ecto.Changeset.put_assoc(changes, :fantasy_positions, list_positions_by_abbreviation(positions))
-    else
-      changes
-    end
+    changes =
+      if positions do
+        Ecto.Changeset.put_assoc(
+          changes,
+          :fantasy_positions,
+          list_positions_by_abbreviation(positions)
+        )
+      else
+        changes
+      end
 
     changes
   end

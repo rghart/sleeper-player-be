@@ -30,8 +30,35 @@ defmodule SleeperPlayerApi.Sleeper.Player do
   @doc false
   def changeset(player, attrs) do
     player
-    |> cast(attrs, [:id, :player_json, :active, :age, :first_name, :last_name, :full_name, :player_id, :search_first_name, :search_last_name, :search_full_name, :search_rank, :years_exp, :position_id, :status_id, :team_id])
-    |> validate_required([:player_json, :active, :first_name, :last_name, :full_name, :player_id, :search_first_name, :search_last_name, :search_full_name])
+    |> cast(attrs, [
+      :id,
+      :player_json,
+      :active,
+      :age,
+      :first_name,
+      :last_name,
+      :full_name,
+      :player_id,
+      :search_first_name,
+      :search_last_name,
+      :search_full_name,
+      :search_rank,
+      :years_exp,
+      :position_id,
+      :status_id,
+      :team_id
+    ])
+    |> validate_required([
+      :player_json,
+      :active,
+      :first_name,
+      :last_name,
+      :full_name,
+      :player_id,
+      :search_first_name,
+      :search_last_name,
+      :search_full_name
+    ])
     |> unique_constraint([:player_id])
   end
 end
