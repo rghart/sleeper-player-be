@@ -81,6 +81,22 @@ defmodule SleeperPlayerApi.Intel.MarketSettingsTest do
     test "is false for anything else" do
       refute MarketSettings.default?(%{MarketSettings.default() | num_qbs: 1})
     end
+
+    # The payoff for clamping: a 12-team full-PPR dynasty league that starts
+    # three quarterbacks is asking the stored slice's question, so it is
+    # answered from the database with no fetch at all.
+    test "is true for a league whose extra quarterbacks the provider ignores" do
+      assert MarketSettings.default?(%{MarketSettings.default() | num_qbs: 3})
+      assert MarketSettings.default?(%{MarketSettings.default() | num_qbs: 4})
+    end
+  end
+
+  describe "parse/1 and the clamp" do
+    # Only what is *sent* is clamped. "You start four quarterbacks" is true
+    # about the league, and the clamp is a fact about the provider.
+    test "keeps the caller's own quarterback count in the settings" do
+      assert {:ok, %{num_qbs: 4}} = MarketSettings.parse(%{"num_qbs" => "4"})
+    end
   end
 
   describe "to_query/1" do
@@ -102,6 +118,24 @@ defmodule SleeperPlayerApi.Intel.MarketSettingsTest do
       {:ok, from_float} = MarketSettings.parse(%{"ppr" => "1.0"})
 
       assert MarketSettings.to_query(from_int) == MarketSettings.to_query(from_float)
+    end
+
+    # FantasyCalc prices one quarterback or more-than-one and nothing beyond:
+    # measured against the live API, numQbs of 2, 3 and 4 return identical
+    # values. Asking for 4 spends a second request on somebody else's free API
+    # for an answer already held under a different key.
+    test "asks for no more quarterbacks than the provider prices" do
+      four = MarketSettings.to_query(%{dynasty: true, num_qbs: 4, num_teams: 12, ppr: 1.0})
+      two = MarketSettings.to_query(%{dynasty: true, num_qbs: 2, num_teams: 12, ppr: 1.0})
+
+      assert URI.decode_query(four)["numQbs"] == "2"
+      assert four == two
+    end
+
+    test "leaves a single-quarterback league alone" do
+      query = MarketSettings.to_query(%{dynasty: true, num_qbs: 1, num_teams: 12, ppr: 1.0})
+
+      assert URI.decode_query(query)["numQbs"] == "1"
     end
 
     test "keeps a fractional ppr" do
