@@ -44,12 +44,18 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
   # Header order matters as little as possible — the parser resolves columns by
   # name — but the shape mirrors the real file, including the `NA` it uses for
   # a missing id and a quoted name sitting after both id columns.
+  #
+  # The `0` row is deliberately not in the real file. It is here so the
+  # draft-pick test actually exercises the `mflid: 0` guard: without it the
+  # pick drops because nothing is keyed `0`, and the test passes whether or
+  # not the guard exists. A sabotage run caught exactly that.
   @crosswalk """
   mfl_id,sportradar_id,fantasypros_id,gsis_id,pff_id,sleeper_id,name
   16162,abc,1,00-1,NA,9509,Jahmyr Gibbs
   16190,def,2,00-2,NA,9500,Zay Flowers
   17472,ghi,3,00-3,NA,13100,Jeremiyah Love
   15024,jkl,4,00-4,NA,NA,No Sleeper Id
+  0,pqr,6,00-6,NA,4242,Not A Real Player
   0634,mno,5,00-5,NA,NA,"Bennett,Michael"
   """
 
@@ -122,8 +128,11 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
     assert {:ok, entries} = KeepTradeCut.fetch_values()
 
     # Two players, two variants each. The pick contributes nothing, and in
-    # particular does not join to whatever the crosswalk might hold at 0.
+    # particular does not join to the id the fixture crosswalk deliberately
+    # holds at 0 — which is what makes this test about the guard rather than
+    # about the crosswalk happening to lack that row.
     assert length(entries) == 4
+    refute Enum.any?(entries, &(&1.player_id == 4242))
     refute Enum.any?(entries, &(&1.value == 7357.0))
   end
 
