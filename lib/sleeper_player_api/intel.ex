@@ -253,12 +253,30 @@ defmodule SleeperPlayerApi.Intel do
 
   Last write of a day wins, which is what makes this a close rather than an
   open. Within a day the refresh runs many times; only the newest survives.
+
+  **Deduplicated by `(player_id, source, day)` before insert, last occurrence
+  winning** — the same rule, applied within a single call rather than across
+  calls. Postgres refuses an `ON CONFLICT DO UPDATE` that would touch one row
+  twice in a statement (`cardinality_violation`), so a caller handing over two
+  points for the same day does not merely write twice, it fails the whole
+  batch. KTC's published history does exactly this: Ja'Marr Chase's series
+  carries 1,975 points across 1,971 distinct dates. This is enforced here
+  rather than in the backfill because it is a property of the table, and the
+  next source to do it should not have to rediscover the rule.
   """
   @spec record_value_history([map]) :: {non_neg_integer, nil}
   def record_value_history(values) do
+    rows =
+      values
+      |> Enum.flat_map(&history_row/1)
+      |> Enum.reduce(%{}, fn row, acc ->
+        Map.put(acc, {row.player_id, row.source, row.day}, row)
+      end)
+      |> Map.values()
+
     insert_all_batched(
       PlayerValueHistory,
-      Enum.flat_map(values, &history_row/1),
+      rows,
       conflict_target: [:player_id, :source, :day],
       replace: [:value, :overall_rank, :position_rank, :as_of, :updated_at]
     )
