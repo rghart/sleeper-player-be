@@ -68,6 +68,64 @@ defmodule SleeperPlayerApi.Client.KeepTradeCut do
     end
   end
 
+  @doc """
+  `GET /dynasty-rankings/players/:slug`, returning that player's value
+  history under both variants as `{:ok, %{one_qb: map, superflex: map}}`.
+
+  This is the only place KTC publishes a time series. The rankings page
+  carries `history: []` for every player; the *player* page embeds
+  `var playerOneQB` and `var playerSuperflex`, each with `overallValue`,
+  `overallRankHistory` and `positionalRankHistory` — daily points back to
+  2023-03-10.
+
+  Each page is ~3.5MB, because it re-embeds the full rankings array
+  alongside the one player's history. That is why this belongs to a one-shot
+  paced backfill and never to the hourly refresh: the whole board costs one
+  1.3MB request through `get_rankings/0`, and the whole board's *history*
+  costs ~465 requests and ~1.6GB.
+
+  A variant that is missing or does not decode comes back absent from the map
+  rather than failing the page — one variant is still worth backfilling.
+  `{:error, :player_not_found}` when neither is present, which is what a bad
+  slug or a redesign looks like.
+  """
+  @spec get_player_history(String.t()) :: {:ok, map} | {:error, term}
+  def get_player_history(slug) do
+    case get("/dynasty-rankings/players/#{slug}", [], recv_timeout: 30_000) do
+      {:ok, %HTTPoison.Response{status_code: status, body: body}} when status in 200..299 ->
+        variants =
+          %{one_qb: "playerOneQB", superflex: "playerSuperflex"}
+          |> Enum.flat_map(fn {key, var} ->
+            case extract_object(body, var) do
+              {:ok, object} -> [{key, object}]
+              :error -> []
+            end
+          end)
+          |> Map.new()
+
+        if map_size(variants) == 0, do: {:error, :player_not_found}, else: {:ok, variants}
+
+      {:ok, %HTTPoison.Response{status_code: status}} ->
+        {:error, {:http_error, status}}
+
+      {:error, %HTTPoison.Error{reason: reason}} ->
+        {:error, {:transport_error, reason}}
+    end
+  end
+
+  # Anchored on `};` at end of line rather than on brace balancing: these are
+  # machine-emitted one-per-line literals, and a balanced-brace scan over a
+  # 3.5MB page to gain nothing measurable is not worth the code.
+  defp extract_object(body, var) do
+    with [json] <-
+           Regex.run(~r/var #{var}\s*=\s*(\{.*?\});\s*$/ms, body, capture: :all_but_first),
+         {:ok, object} <- Jason.decode(json) do
+      {:ok, object}
+    else
+      _ -> :error
+    end
+  end
+
   defp extract_players(body) do
     case Regex.run(@players_array, body, capture: :all_but_first) do
       [json] ->
