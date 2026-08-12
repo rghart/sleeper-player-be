@@ -149,6 +149,22 @@ defmodule SleeperPlayerApi.Tasks.RefreshPlayerValuesTest do
              Repo.all(PlayerValueHistory) |> Enum.sort_by(& &1.day) |> Enum.map(& &1.value)
   end
 
+  test "two points for the same day in one call collapse, last one winning" do
+    # Not hypothetical: KTC's published history repeats dates for some players
+    # (Ja'Marr Chase's series is 1,975 points over 1,971 distinct days).
+    # Postgres refuses an ON CONFLICT DO UPDATE that touches a row twice in one
+    # statement, so without deduping this fails the entire batch rather than
+    # writing twice.
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    point = fn value ->
+      %{player_id: 13_353, source: "fantasycalc", value: value, as_of: now}
+    end
+
+    assert {1, _} = SleeperPlayerApi.Intel.record_value_history([point.(4200.0), point.(4500.0)])
+    assert [%{value: 4500.0}] = Repo.all(PlayerValueHistory)
+  end
+
   test "an entry with no as_of is dropped rather than dated by guesswork" do
     # A history row whose date was guessed would silently overwrite a real
     # close for that day, which is worse than having no row at all.
