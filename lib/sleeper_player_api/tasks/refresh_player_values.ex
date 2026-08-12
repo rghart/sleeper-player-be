@@ -8,12 +8,15 @@ defmodule SleeperPlayerApi.Tasks.RefreshPlayerValues do
   Both writes happen in every run, off one shaping pass, so there is no run
   that can update the current value without also recording the series.
 
-  Deliberately NOT wired into the Quantum schedule
-  (`config/config.exs`) — scheduling this is a production behaviour change
-  that needs separate sign-off. Invoke directly, same as
-  `SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts`:
+  Runs on two Quantum schedules (`config/config.exs`), one per source:
+  FantasyCalc nightly at 3:30am Central, and KeepTradeCut hourly at :15
+  because its values are continuously crowdsourced. Both can also be invoked
+  directly:
 
       SleeperPlayerApi.Tasks.RefreshPlayerValues.refresh_player_values()
+      SleeperPlayerApi.Tasks.RefreshPlayerValues.refresh_player_values(
+        SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut
+      )
 
   Batched `Repo.insert_all`/`on_conflict` throughout (via
   `SleeperPlayerApi.Intel.upsert_player_values/1`) — the one-shot fetch
