@@ -1,14 +1,22 @@
 defmodule SleeperPlayerApi.Tasks.RefreshPlayerValues do
   @moduledoc """
   Fetches player values from a `SleeperPlayerApi.Intel.PlayerValueSource`
-  and upserts them into `player_values`, per plan §3f step 5.
+  and writes them to two places, per plan §3f step 5: `player_values` (the
+  current value, upserted in place) and `player_value_history` (that day's
+  close, one row per player per source per day).
 
-  Deliberately NOT wired into the Quantum schedule
-  (`config/config.exs`) — scheduling this is a production behaviour change
-  that needs separate sign-off. Invoke directly, same as
-  `SleeperPlayerApi.Tasks.CrawlLeaguemateDrafts`:
+  Both writes happen in every run, off one shaping pass, so there is no run
+  that can update the current value without also recording the series.
+
+  Runs on two Quantum schedules (`config/config.exs`), one per source:
+  FantasyCalc nightly at 3:30am Central, and KeepTradeCut hourly at :15
+  because its values are continuously crowdsourced. Both can also be invoked
+  directly:
 
       SleeperPlayerApi.Tasks.RefreshPlayerValues.refresh_player_values()
+      SleeperPlayerApi.Tasks.RefreshPlayerValues.refresh_player_values(
+        SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut
+      )
 
   Batched `Repo.insert_all`/`on_conflict` throughout (via
   `SleeperPlayerApi.Intel.upsert_player_values/1`) — the one-shot fetch
@@ -43,7 +51,20 @@ defmodule SleeperPlayerApi.Tasks.RefreshPlayerValues do
     case source.fetch_values() do
       {:ok, entries} ->
         {count, _} = Intel.upsert_player_values(entries)
-        Logger.info("RefreshPlayerValues: stored #{count} values from #{source.name()}")
+
+        # Both writes, every run, from one shaping pass. The current-value
+        # table answers "what is he worth"; the history table answers "what
+        # has he been worth", and only the second one can support an
+        # in-season buy-low/sell-high read. Writing the close here rather
+        # than in a separate job is what stops the two drifting apart —
+        # there is no run that updates one and not the other.
+        {recorded, _} = Intel.record_value_history(entries)
+
+        Logger.info(
+          "RefreshPlayerValues: stored #{count} values from #{source.name()}, " <>
+            "#{recorded} history rows"
+        )
+
         {:ok, count}
 
       {:error, reason} = error ->

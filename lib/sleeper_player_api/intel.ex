@@ -40,6 +40,7 @@ defmodule SleeperPlayerApi.Intel do
     ObservedPick,
     ObservedTradedPick,
     PlayerValue,
+    PlayerValueHistory,
     DraftParticipant,
     ObservedLeague,
     ObservedRoster,
@@ -235,6 +236,49 @@ defmodule SleeperPlayerApi.Intel do
       ]
     )
   end
+
+  @doc """
+  Records the same value entries into `player_value_history` as that day's
+  close, keyed `(player_id, source, day)`.
+
+  Takes exactly what `upsert_player_values/1` takes, so the caller shapes its
+  entries once and writes them to both places — the current-value table and
+  the time series — rather than the source having to know there are two.
+
+  `day` is derived from each entry's own `as_of` rather than from
+  `Date.utc_today/0`, so a backfill or a replayed fetch lands on the day it
+  describes instead of the day it ran. Entries carrying no `as_of` are
+  dropped: a row in a time series whose date was guessed is worse than an
+  absent one, and it would silently overwrite a real close.
+
+  Last write of a day wins, which is what makes this a close rather than an
+  open. Within a day the refresh runs many times; only the newest survives.
+  """
+  @spec record_value_history([map]) :: {non_neg_integer, nil}
+  def record_value_history(values) do
+    insert_all_batched(
+      PlayerValueHistory,
+      Enum.flat_map(values, &history_row/1),
+      conflict_target: [:player_id, :source, :day],
+      replace: [:value, :overall_rank, :position_rank, :as_of, :updated_at]
+    )
+  end
+
+  defp history_row(%{as_of: %DateTime{} = as_of} = entry) do
+    [
+      %{
+        player_id: entry.player_id,
+        source: entry.source,
+        day: DateTime.to_date(as_of),
+        value: entry[:value],
+        overall_rank: entry[:overall_rank],
+        position_rank: entry[:position_rank],
+        as_of: as_of
+      }
+    ]
+  end
+
+  defp history_row(_entry), do: []
 
   @doc """
   The current market values for `source`, best player first.

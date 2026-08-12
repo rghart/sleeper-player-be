@@ -98,6 +98,32 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
       overlap: false
     ],
 
+    # Hourly at :15 — refresh market values from KeepTradeCut.
+    #
+    # Hourly rather than nightly because KTC is continuously crowdsourced:
+    # measured 2026-08-12, 7 of 500 values moved between two fetches roughly
+    # two minutes apart. One 1.3MB page per run.
+    #
+    # At :15 so it never lands on the same minute as the nightly sweeps at
+    # :00 and :30, which would have it contending with them four times a
+    # night for nothing.
+    #
+    # The source is passed explicitly rather than read from
+    # `:player_value_source`, which stays FantasyCalc — `Intel.Estimator` is
+    # calibrated against that slice and this job must not re-base it.
+    #
+    # Note this writes a *daily close* to `player_value_history`, not 24 rows
+    # a day: the hourly cadence is about catching a move promptly in the
+    # current-value table, and the last write of a day wins in the series.
+    [
+      name: :refresh_ktc_values,
+      schedule: "15 * * * *",
+      task:
+        {SleeperPlayerApi.Tasks.RefreshPlayerValues, :refresh_player_values,
+         [SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut]},
+      overlap: false
+    ],
+
     # 4:00am Central — sweep leaguemate drafts. Completed drafts are
     # immutable and never refetched, so a warm run is cheap.
     [
