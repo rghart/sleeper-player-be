@@ -41,6 +41,7 @@ defmodule SleeperPlayerApi.Intel do
     ObservedTradedPick,
     PlayerValue,
     PlayerValueHistory,
+    DraftPickValue,
     DraftParticipant,
     ObservedLeague,
     ObservedRoster,
@@ -297,6 +298,47 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   defp history_row(_entry), do: []
+
+  @doc """
+  Upserts rookie draft pick values, keyed `(season, round, tier, source)`.
+
+  Refreshed in place like `player_values`, and for the same reason: the
+  question these answer is "what is a 2027 1st worth now".
+  """
+  @spec upsert_draft_pick_values([map]) :: {non_neg_integer, nil}
+  def upsert_draft_pick_values(values) do
+    insert_all_batched(
+      DraftPickValue,
+      values,
+      conflict_target: [:season, :round, :tier, :source],
+      replace: [:value, :overall_rank, :position_rank, :as_of, :updated_at]
+    )
+  end
+
+  @doc """
+  Pick values for `source`, most valuable first.
+
+  All three tiers come back for each `(season, round)`. Picking one is the
+  caller's job — a Sleeper traded pick carries no tier, and `"mid"` is the
+  honest default rather than a fact.
+  """
+  @spec draft_pick_values(String.t()) :: [map]
+  def draft_pick_values(source) do
+    from(pv in DraftPickValue,
+      where: pv.source == ^source,
+      order_by: [desc_nulls_last: pv.value],
+      select: %{
+        season: pv.season,
+        round: pv.round,
+        tier: pv.tier,
+        value: pv.value,
+        overall_rank: pv.overall_rank,
+        position_rank: pv.position_rank,
+        as_of: pv.as_of
+      }
+    )
+    |> Repo.all()
+  end
 
   @doc """
   The current market values for `source`, best player first.

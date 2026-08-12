@@ -108,9 +108,12 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
     # :00 and :30, which would have it contending with them four times a
     # night for nothing.
     #
-    # The source is passed explicitly rather than read from
-    # `:player_value_source`, which stays FantasyCalc — `Intel.Estimator` is
-    # calibrated against that slice and this job must not re-base it.
+    # `RefreshKtcValues` rather than the generic `RefreshPlayerValues`: KTC
+    # ships players and rookie draft picks in one payload, bound for different
+    # tables, and this way that costs one request instead of two. FantasyCalc
+    # still runs through the generic task above, and stays the configured
+    # `:player_value_source` — `Intel.Estimator` is calibrated against that
+    # slice and this job must not re-base it.
     #
     # Note this writes a *daily close* to `player_value_history`, not 24 rows
     # a day: the hourly cadence is about catching a move promptly in the
@@ -118,9 +121,7 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
     [
       name: :refresh_ktc_values,
       schedule: "15 * * * *",
-      task:
-        {SleeperPlayerApi.Tasks.RefreshPlayerValues, :refresh_player_values,
-         [SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut]},
+      task: {SleeperPlayerApi.Tasks.RefreshKtcValues, :refresh, []},
       overlap: false
     ],
 

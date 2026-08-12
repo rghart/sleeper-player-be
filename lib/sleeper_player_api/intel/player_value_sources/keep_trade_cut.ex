@@ -73,23 +73,93 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   def fetch_values do
     with {:ok, players} <- Client.get_rankings(),
          {:ok, crosswalk} <- PlayerIdCrosswalk.mfl_to_sleeper() do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-      entries = Enum.flat_map(players, &shape_player(&1, crosswalk, now))
-
-      case entries do
-        [] ->
-          # Every player failing to join is not a quiet no-op: it is what a
-          # broken crosswalk, a renamed field or an error page served with a
-          # 200 all look like, and upserting nothing would leave the last
-          # good values in place with no signal that anything went wrong.
-          {:error, :no_joinable_players}
-
-        entries ->
-          log_coverage(players, entries)
-          {:ok, entries}
-      end
+      shape_players(players, crosswalk, DateTime.utc_now() |> DateTime.truncate(:second))
     end
   end
+
+  @doc """
+  The pure half of `fetch_values/0`: a fetched payload and crosswalk shaped
+  into value entries.
+
+  Split out so `Tasks.RefreshKtcValues` can shape players and picks from one
+  fetch instead of requesting the same 1.3MB page twice.
+  """
+  @spec shape_players([map], map, DateTime.t()) :: {:ok, [map]} | {:error, :no_joinable_players}
+  def shape_players(players, crosswalk, now) do
+    case Enum.flat_map(players, &shape_player(&1, crosswalk, now)) do
+      [] ->
+        # Every player failing to join is not a quiet no-op: it is what a
+        # broken crosswalk, a renamed field or an error page served with a
+        # 200 all look like, and upserting nothing would leave the last
+        # good values in place with no signal that anything went wrong.
+        {:error, :no_joinable_players}
+
+      entries ->
+        log_coverage(players, entries)
+        {:ok, entries}
+    end
+  end
+
+  @doc """
+  The rookie draft picks in the same payload, shaped for `draft_pick_values`.
+
+  Separate from `fetch_values/0` because they go to a different table — a pick
+  is not a player and `player_values.player_id` is a Sleeper player id. The
+  caller fetches once and writes both; see `Tasks.RefreshKtcValues`.
+
+  Both variants per pick, same as players. Anything whose name does not parse
+  as `"<season> <tier> <round>"` is dropped rather than guessed at — KTC's 36
+  entries are exactly regular today, and an unparseable one means the naming
+  changed, which should show up as missing rather than as a wrong price.
+  """
+  @spec pick_entries([map], DateTime.t()) :: [map]
+  def pick_entries(players, now) do
+    Enum.flat_map(players, fn player ->
+      case parse_pick(player["playerName"]) do
+        {:ok, {season, tier, round}} ->
+          [{@one_qb, player["oneQBValues"]}, {@superflex, player["superflexValues"]}]
+          |> Enum.flat_map(fn
+            {_source, nil} ->
+              []
+
+            {source, values} ->
+              [
+                %{
+                  season: season,
+                  round: round,
+                  tier: tier,
+                  source: source,
+                  value: to_float(values["value"]),
+                  overall_rank: values["rank"],
+                  position_rank: values["positionalRank"],
+                  as_of: now
+                }
+              ]
+          end)
+
+        :error ->
+          []
+      end
+    end)
+  end
+
+  # "2027 Early 1st" -> {2027, "early", 1}. The ordinal suffix is not
+  # validated against the number (no "1th" check): it is decoration on a value
+  # already captured, and rejecting a well-formed round over its suffix would
+  # lose a real price.
+  @pick_name ~r/^(\d{4})\s+(Early|Mid|Late)\s+(\d+)(?:st|nd|rd|th)$/i
+
+  defp parse_pick(name) when is_binary(name) do
+    case Regex.run(@pick_name, String.trim(name), capture: :all_but_first) do
+      [season, tier, round] ->
+        {:ok, {String.to_integer(season), String.downcase(tier), String.to_integer(round)}}
+
+      nil ->
+        :error
+    end
+  end
+
+  defp parse_pick(_), do: :error
 
   # Both variants for one player, or `[]` if he cannot be joined to a Sleeper
   # id at all. `flat_map` over `[]`/`[entry]` drops an unjoinable row without
