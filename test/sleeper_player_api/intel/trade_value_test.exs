@@ -6,6 +6,71 @@ defmodule SleeperPlayerApi.Intel.TradeValueTest do
   # The #1 asset on the board, which sets the global scale.
   @top 9999
 
+  describe "agreement with the published implementation" do
+    # Generated 2026-08-12 by running KeepTradeCut's own `processV` and side
+    # loop — lifted verbatim from their public site.min.js — over these
+    # packages, with the board top fixed at 9999.
+    #
+    # This is the only thing standing between this module and a plausible
+    # number. The constants are a *fit*, and the first version of this file
+    # passed twelve hand-written behavioural tests while being systematically
+    # wrong: it counted the current piece in the depth penalty, so the first
+    # small asset was discounted when it should not be, and every multi-piece
+    # package came out low (8x1500 priced 804.99 against the real 867.51).
+    # No amount of "is it monotonic", "does concentration win" reasoning
+    # catches that. Differential testing did, immediately.
+    #
+    # If these ever need regenerating, re-derive them from their source rather
+    # than from this module — a golden file regenerated from the code it is
+    # meant to check proves nothing.
+    @golden [
+      {[7000], [1500, 1500, 1500, 1500, 1500, 1500, 1500, 1500], 1179.073175, 867.510911},
+      {[6000], [3000, 3000], 976.718053, 665.575669},
+      {[6000, 6000], [12000], 1512.702638, 2400.467846},
+      {[7000, 1500, 900], [4000, 4000], 1413.536218, 930.700143},
+      {[7000], List.duplicate(1500, 12), 1179.073175, 1242.650764},
+      {[9999], [9999], 1867.767815, 1867.767815},
+      {[100], [100, 100, 100], 13.743509, 41.230526},
+      {[5000, 4000, 3000], [8000], 1405.453887, 1394.719745},
+      # Straddling the half-of-best threshold, where the depth penalty starts.
+      {[8000], [4001, 4001], 1394.719745, 925.249423},
+      {[8000], [3999, 3999], 1394.719745, 855.342639},
+      {[2000], [], 286.83662, 0.0},
+      {[1500, 1500], [3000], 314.35465, 442.971202},
+      {[9999, 1], [5000], 1867.867815, 603.414866},
+      {[4500, 4500, 4500], [6000, 3000], 1676.259283, 1309.505888},
+      # Real KTC pick values: 2027/2026 1sts against a spread of later picks.
+      {[7357, 5311], [6158, 4680, 2503], 1929.109983, 1693.880189}
+    ]
+
+    test "reproduces the reference totals on every package" do
+      for {one, two, expected_one, expected_two} <- @golden do
+        result = TradeValue.evaluate(one, two, @top)
+
+        assert_in_delta result.one.adjusted,
+                        expected_one,
+                        0.0001,
+                        "side one mismatch for #{inspect(one)} vs #{inspect(two)}"
+
+        assert_in_delta result.two.adjusted,
+                        expected_two,
+                        0.0001,
+                        "side two mismatch for #{inspect(one)} vs #{inspect(two)}"
+      end
+    end
+
+    test "the first small piece is not penalised, the second is" do
+      # The specific off-by-one the golden set caught, pinned on its own so a
+      # regression names itself instead of surfacing as a decimal mismatch.
+      %{pieces: [first, second | _]} = TradeValue.adjust_side([1500, 1500], 7000, @top)
+
+      assert first.small and second.small
+      assert first.depth_index == 0
+      assert second.depth_index == 1
+      assert first.adjusted > second.adjusted
+    end
+  end
+
   describe "the case the whole module exists for" do
     test "eight small pieces outweigh a stud on raw value and lose after adjustment" do
       result = TradeValue.evaluate([7000], List.duplicate(1500, 8), @top)

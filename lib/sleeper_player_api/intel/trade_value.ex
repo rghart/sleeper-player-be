@@ -27,10 +27,17 @@ defmodule SleeperPlayerApi.Intel.TradeValue do
   1500s would measure itself against its own best 1500 and look concentrated
   rather than thin.
 
-  **This is a model of their mechanism, not a port of their code, and it is
-  not authoritative.** Verify against the live calculator before trusting a
-  close call — `parameters/0` exists so the constants can be tuned against
-  observed output rather than being spread through the arithmetic.
+  **Validated against the published implementation**, not merely modelled on
+  it: the test suite pins fifteen packages against totals produced by KTC's
+  own `processV` and side loop. That check earned its keep immediately — the
+  first version passed a dozen hand-written behavioural tests while being
+  systematically wrong about depth (see `adjust_side/3`). Behavioural
+  reasoning cannot catch an off-by-one that preserves every ordering property
+  you would think to assert.
+
+  `parameters/0` exposes the constants so a re-fit is a data change. If they
+  are ever re-derived, re-derive the golden totals from *their* source too —
+  a golden file regenerated from the code it checks proves nothing.
   """
 
   # Named so they can be read, cited and re-fitted. Fitted to reproduce the
@@ -110,14 +117,21 @@ defmodule SleeperPlayerApi.Intel.TradeValue do
   def adjust_side(values, best, top_value) do
     scale = normaliser(top_value)
 
-    {pieces, _depth} =
+    {pieces, _seen} =
       values
       |> Enum.sort(:desc)
-      |> Enum.map_reduce(0, fn value, depth ->
-        depth = if small?(value, best), do: depth + 1, else: depth
-        adjusted = piece_value(value, best, scale, depth)
+      |> Enum.map_reduce(0, fn value, seen ->
+        # The penalty counts small pieces *before* this one, so the first
+        # small piece is unpenalised and the second is the first to be
+        # discounted. Incrementing before the call instead — the obvious
+        # reading — penalises every package one piece too early and
+        # systematically under-values depth. Caught only by differential
+        # testing against the published implementation.
+        adjusted = piece_value(value, best, scale, seen)
+        small = small?(value, best)
 
-        {%{raw: value, adjusted: adjusted, depth_index: depth, small: small?(value, best)}, depth}
+        {%{raw: value, adjusted: adjusted, depth_index: seen, small: small},
+         if(small, do: seen + 1, else: seen)}
       end)
 
     %{
@@ -130,8 +144,10 @@ defmodule SleeperPlayerApi.Intel.TradeValue do
   @doc """
   One asset's adjusted contribution.
 
-  `depth` is how many pieces on this side — including this one — are below
-  the small-asset threshold. Zero means no depth penalty applies.
+  `depth` is how many pieces on this side **before this one** are below the
+  small-asset threshold — so the first small piece passes 0 and takes no
+  penalty, and the second passes 1. Counting this piece too was a real bug,
+  found by differential test.
   """
   @spec piece_value(number, number, number, non_neg_integer) :: float
   def piece_value(value, best, scale, depth) do
