@@ -316,6 +316,65 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
+  Current values for `source`, each with how far it has moved over
+  `window_days` — the in-season dynasty read the history table was built for.
+
+  A buy-low and a sell-high are both claims about a price *changing*, so the
+  movement travels with the value rather than being a second request the
+  caller has to join itself.
+
+  **The comparison point is the most recent close on or before the target
+  day, not the close on that exact day.** A player with no row on that date —
+  a gap in the crawl, or a rookie whose series starts later — would otherwise
+  come back with no movement at all, which reads identically to "has not
+  moved". `since` states which day was actually used, so the caller can say
+  "over 28 days" rather than implying 30.
+
+  `change` is `nil`, never `0`, when there is no earlier close to compare
+  against. Zero is a real answer meaning "flat", and the two must not collide
+  — the same no-chip ambiguity this codebase keeps re-learning.
+  """
+  @spec values_with_movement(String.t(), pos_integer) :: [map]
+  def values_with_movement(source, window_days) do
+    target = Date.add(Date.utc_today(), -window_days)
+
+    past =
+      from(h in PlayerValueHistory,
+        where: h.source == ^source and h.day <= ^target,
+        distinct: h.player_id,
+        order_by: [asc: h.player_id, desc: h.day],
+        select: %{player_id: h.player_id, value: h.value, day: h.day}
+      )
+
+    from(pv in PlayerValue,
+      where: pv.source == ^source,
+      left_join: p in subquery(past),
+      on: p.player_id == pv.player_id,
+      order_by: [asc_nulls_last: pv.overall_rank],
+      select: %{
+        player_id: pv.player_id,
+        value: pv.value,
+        overall_rank: pv.overall_rank,
+        position_rank: pv.position_rank,
+        as_of: pv.as_of,
+        previous_value: p.value,
+        since: p.day
+      }
+    )
+    |> Repo.all()
+    |> Enum.map(&with_change/1)
+  end
+
+  defp with_change(%{value: value, previous_value: previous} = row)
+       when is_number(value) and is_number(previous) and previous > 0 do
+    row
+    |> Map.put(:change, value - previous)
+    |> Map.put(:change_pct, Float.round(100 * (value - previous) / previous, 1))
+  end
+
+  defp with_change(row), do: row |> Map.put(:change, nil) |> Map.put(:change_pct, nil)
+
+  @doc """
   Pick values for `source`, most valuable first.
 
   All three tiers come back for each `(season, round)`. Picking one is the
