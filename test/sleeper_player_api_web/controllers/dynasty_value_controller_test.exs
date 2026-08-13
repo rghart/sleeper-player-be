@@ -63,14 +63,39 @@ defmodule SleeperPlayerApiWeb.DynastyValueControllerTest do
     # comparison must fall back to the nearest earlier close rather than
     # reporting no movement, and must say which day it used.
     seed_value(4984, "keeptradecut:sf", 6000.0, 1)
-    seed_history(4984, "keeptradecut:sf", 5500.0, 44)
+    seed_history(4984, "keeptradecut:sf", 5500.0, 40)
     # Inside the window, so it must NOT be chosen as the baseline.
     seed_history(4984, "keeptradecut:sf", 5900.0, 3)
 
     body = conn |> get(~p"/api/v1/dynasty-values") |> json_response(200)
 
     assert [%{"change" => 500.0, "since" => since}] = body["values"]
-    assert since == Date.to_iso8601(Date.add(Date.utc_today(), -44))
+    assert since == Date.to_iso8601(Date.add(Date.utc_today(), -40))
+  end
+
+  test "ignores a close older than the lookback bound rather than calling it 30 days", %{
+    conn: conn
+  } do
+    # 100 days back is not a 30-day comparison, and labelling it one would be
+    # a false statement. It is also what made the query scan the whole series
+    # and take 14s cold in production.
+    seed_value(4984, "keeptradecut:sf", 6000.0, 1)
+    seed_history(4984, "keeptradecut:sf", 1000.0, 100)
+
+    body = conn |> get(~p"/api/v1/dynasty-values") |> json_response(200)
+
+    assert [%{"change" => nil, "since" => nil}] = body["values"]
+  end
+
+  test "still finds a close just inside the lookback bound", %{conn: conn} do
+    # 30 + 13 days: inside the two-week reach, so a real gap in the series is
+    # still bridged rather than silenced.
+    seed_value(4984, "keeptradecut:sf", 6000.0, 1)
+    seed_history(4984, "keeptradecut:sf", 5000.0, 43)
+
+    body = conn |> get(~p"/api/v1/dynasty-values") |> json_response(200)
+
+    assert [%{"change" => 1000.0}] = body["values"]
   end
 
   test "change is null, not zero, when there is nothing to compare against", %{conn: conn} do

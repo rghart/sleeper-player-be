@@ -51,6 +51,13 @@ defmodule SleeperPlayerApi.Intel do
 
   @batch_size 1000
 
+  # How far before the target day `values_with_movement/2` will look for a
+  # close to compare against. Two weeks: the series is daily and unbroken for
+  # any player the market is actually trading, so this is generous for a real
+  # gap while refusing to reach back months. See that function for why an
+  # unbounded search is both wrong and slow.
+  @movement_lookback_days 14
+
   # ---------------------------------------------------------------------
   # Upserts
   # ---------------------------------------------------------------------
@@ -330,17 +337,33 @@ defmodule SleeperPlayerApi.Intel do
   moved". `since` states which day was actually used, so the caller can say
   "over 28 days" rather than implying 30.
 
+  **The search back from the target is bounded** (`@movement_lookback_days`),
+  and that is both a correctness rule and the difference between a fast
+  endpoint and an unusable one:
+
+    * Correctness: an unbounded `day <= target` will happily compare against a
+      close from 2023 and let the caller label it a 30-day change. A price
+      that old is not a comparison, it is a different question.
+    * Speed: unbounded, it matches every row back to the start of the series —
+      567,050 of them to produce 460 — and depends entirely on those pages
+      being cached. Measured on production, warm that is ~340ms and cold it is
+      **14.5 seconds**, which is what the *first* load after each hourly
+      refresh actually got, because the refresh churns the cache. Bounded to
+      two weeks it scans 6,440 rows in ~126ms, cached or not.
+
   `change` is `nil`, never `0`, when there is no earlier close to compare
-  against. Zero is a real answer meaning "flat", and the two must not collide
-  — the same no-chip ambiguity this codebase keeps re-learning.
+  against — including when the only closes are older than the bound. Zero is a
+  real answer meaning "flat", and the two must not collide — the same no-chip
+  ambiguity this codebase keeps re-learning.
   """
   @spec values_with_movement(String.t(), pos_integer) :: [map]
   def values_with_movement(source, window_days) do
     target = Date.add(Date.utc_today(), -window_days)
+    earliest = Date.add(target, -@movement_lookback_days)
 
     past =
       from(h in PlayerValueHistory,
-        where: h.source == ^source and h.day <= ^target,
+        where: h.source == ^source and h.day <= ^target and h.day >= ^earliest,
         distinct: h.player_id,
         order_by: [asc: h.player_id, desc: h.day],
         select: %{player_id: h.player_id, value: h.value, day: h.day}
