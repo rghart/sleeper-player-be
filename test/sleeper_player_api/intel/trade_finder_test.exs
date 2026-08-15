@@ -221,9 +221,14 @@ defmodule SleeperPlayerApi.Intel.TradeFinderTest do
         my_picks: [
           %{season: 2027, round: 1},
           %{season: 2027, round: 2},
+          %{season: 2027, round: 3},
           %{season: 2027, round: 4}
         ],
-        pick_values: %{{2027, 1} => 6000, {2027, 2} => 4200, {2027, 4} => 1800},
+        # 4200 and 5000 both close the gap; 1800 is too small and 6000
+        # overshoots into unfair. Two survivors is what makes "cheapest"
+        # testable at all — with one candidate, cheapest and closest-to-even
+        # are the same pick and neither rule is pinned.
+        pick_values: %{{2027, 1} => 6000, {2027, 2} => 4200, {2027, 3} => 5000, {2027, 4} => 1800},
         # A sweetened 1-for-1 fits less well than an unsweetened 2-for-1
         # (the 2-for-1 fills two of their holes), so the default cap of three
         # hides every sweetened trade. Raised here to see them at all.
@@ -260,6 +265,11 @@ defmodule SleeperPlayerApi.Intel.TradeFinderTest do
     end
 
     test "a pick cannot manufacture a fit that the players do not have", ctx do
+      # Over-determined, and worth saying so: with their extra backs the
+      # league average rises far enough that my backs stop counting as spare
+      # at all, so no running-back trade is generated whether or not the fit
+      # check runs. Removing that check leaves this green. It asserts the
+      # guarantee callers rely on, not that particular line.
       # They are deep at running back too, so no player swap fits. A pick
       # closing the value gap must not rescue it — fit is decided before any
       # sweetener, on the players alone.
