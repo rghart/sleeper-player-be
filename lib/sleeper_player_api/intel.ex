@@ -382,18 +382,35 @@ defmodule SleeperPlayerApi.Intel do
     target = Date.add(Date.utc_today(), -window_days)
     earliest = Date.add(target, -@movement_lookback_days)
 
-    past =
-      from(h in PlayerValueHistory,
-        where: h.source == ^source and h.day <= ^target and h.day >= ^earliest,
-        distinct: h.player_id,
-        order_by: [asc: h.player_id, desc: h.day],
-        select: %{player_id: h.player_id, value: h.value, day: h.day}
-      )
-
+    # A LATERAL seek per player, not a scan over the window.
+    #
+    # The `DISTINCT ON` version this replaces read every history row in the
+    # window — 567,050 of them to produce 460 — so its cost grew with the
+    # series while the answer did not. Warm that was ~340ms; cold it blew the
+    # 15s connection-pool timeout and **returned a 500**, which is what the
+    # Movers screen showed the first visitor after each hourly refresh churned
+    # the cache. Found by driving the real app, not by a test.
+    #
+    # This form is bounded by the number of players instead: 488 index seeks
+    # of one row each. Measured on production, 11-14ms warm and 1.8s on a cold
+    # cache — comfortably inside the pool timeout, so the 500 cannot recur.
     from(pv in PlayerValue,
       where: pv.source == ^source,
-      left_join: p in subquery(past),
-      on: p.player_id == pv.player_id,
+      left_lateral_join:
+        p in fragment(
+          """
+          SELECT h.value AS value, h.day AS day
+          FROM player_value_history h
+          WHERE h.source = ? AND h.player_id = ? AND h.day <= ? AND h.day >= ?
+          ORDER BY h.day DESC
+          LIMIT 1
+          """,
+          ^source,
+          pv.player_id,
+          ^target,
+          ^earliest
+        ),
+      on: true,
       order_by: [asc_nulls_last: pv.overall_rank],
       select: %{
         player_id: pv.player_id,
