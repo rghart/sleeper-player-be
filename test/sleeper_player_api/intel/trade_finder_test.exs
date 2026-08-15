@@ -153,6 +153,55 @@ defmodule SleeperPlayerApi.Intel.TradeFinderTest do
       assert length(found) == 1
     end
 
+    test "still sees shape when every roster is deep against its starting slots", ctx do
+      # The case that made the first version return nothing in production.
+      # District 13 rosters carry 8 RB and 9 WR against 2 starting slots each,
+      # so an absolute comparison to starters calls everything deep and
+      # nothing thin. Depth has to be relative to the league.
+      #
+      # Here both rosters are far past their starters everywhere, but mine is
+      # running-back heavy and theirs is receiver heavy — which is a real
+      # trade and must survive.
+      extra_my_rbs = Map.new(1..4, &{"my-rb-x#{&1}", "RB"})
+      extra_my_wrs = Map.new(1..3, &{"my-wr-x#{&1}", "WR"})
+      extra_th_wrs = Map.new(1..4, &{"th-wr-x#{&1}", "WR"})
+      extra_th_rbs = Map.new(1..3, &{"th-rb-x#{&1}", "RB"})
+
+      positions =
+        ctx.positions
+        |> Map.merge(extra_my_rbs)
+        |> Map.merge(extra_my_wrs)
+        |> Map.merge(extra_th_wrs)
+        |> Map.merge(extra_th_rbs)
+
+      values = Map.new(Map.keys(positions), &{&1, 5000})
+
+      mine = %{
+        ctx.mine
+        | player_ids: ctx.mine.player_ids ++ Map.keys(extra_my_rbs) ++ Map.keys(extra_my_wrs)
+      }
+
+      theirs = %{
+        ctx.theirs
+        | player_ids: ctx.theirs.player_ids ++ Map.keys(extra_th_wrs) ++ Map.keys(extra_th_rbs)
+      }
+
+      found = TradeFinder.find(mine, [theirs], opts(positions, values))
+
+      assert found != []
+      assert Enum.all?(hd(found).give, &(positions[&1] == "RB"))
+      assert Enum.all?(hd(found).get, &(positions[&1] == "WR"))
+    end
+
+    test "league_average counts every roster, including the asking one", ctx do
+      average =
+        TradeFinder.league_average([ctx.mine, ctx.theirs], opts(ctx.positions, ctx.values))
+
+      # 4 RB + 2 RB over two rosters, and the mirror for receivers.
+      assert average["RB"] == 3.0
+      assert average["WR"] == 3.0
+    end
+
     test "returns nothing rather than erroring when there is no partner", ctx do
       assert TradeFinder.find(ctx.mine, [], opts(ctx.positions, ctx.values)) == []
     end

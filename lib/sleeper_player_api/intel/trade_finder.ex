@@ -22,14 +22,26 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   whether you are contending — which nothing here knows. Same rule the
   survival number follows: state the measurement, let the manager decide.
 
-  **The need model is the weakest part and is deliberately crude.** It counts
-  bodies against dedicated starting slots and does not run a lineup
-  optimiser, so FLEX is not modelled (a flex slot could be filled from three
-  positions, and deciding which is a different problem). SUPER_FLEX *is*
-  counted, as a quarterback slot, matching what the frontend's
-  `leagueMarketSettings` already does. The surplus signal is coarse but
-  robust: a manager with five running backs and two starting slots is deep at
-  running back under any flex interpretation.
+  **Depth is measured against the league, not against the starting lineup**,
+  and that correction came from running this against a real league rather
+  than a fixture. The first version called a roster deep at a position when
+  it held more bodies than it could start. In District 13 that made *every*
+  position deep for everyone — 8 RB and 9 WR against 2 starting slots each —
+  so no roster was ever thin anywhere and the finder returned nothing at all.
+  Dynasty benches are enormous; an absolute comparison to starter counts
+  cannot see shape.
+
+  What does see it is how a roster compares to the rest of the league at that
+  position. Holding 8 running backs means nothing on its own and means a lot
+  when everyone else holds 5. `@depth_cushion` is how far from the league
+  average a roster has to sit before it counts either way, so a rounding
+  difference is not a trade thesis.
+
+  The model is still crude and still says so: it counts bodies, not quality,
+  and does not run a lineup optimiser, so FLEX is not modelled. SUPER_FLEX
+  *is* counted as a quarterback slot for the starting requirement, matching
+  what the frontend's `leagueMarketSettings` already does — that requirement
+  no longer drives depth, but it is what a caller renders beside it.
   """
 
   alias SleeperPlayerApi.Intel.TradeValue
@@ -39,10 +51,10 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   # sweetener survives, tight enough to exclude a fleecing.
   @fair_band 0.12
 
-  # A roster is deep at a position when it holds more than its starters plus
-  # one — the plus one being the backup nobody trades. Thin is at or below
-  # the starting requirement.
-  @depth_cushion 1
+  # How far from the league's average count at a position a roster has to sit
+  # before it counts as deep or thin. Half a body: enough that a rounding
+  # difference is not a trade thesis, small enough that real shape survives.
+  @depth_cushion 0.5
 
   # Positions worth trading. Kickers and defences are not dynasty assets and
   # KTC does not price them.
@@ -68,6 +80,10 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   @spec find(roster, [roster], map) :: [map]
   def find(mine, others, opts) do
     per_partner = Map.get(opts, :per_partner, 3)
+    # Computed over every roster in the league, including the asking one:
+    # "deep" is a claim about standing out, so the comparison group has to be
+    # everyone. See the moduledoc for why this replaced a starter-count test.
+    opts = Map.put(opts, :league_average, league_average([mine | others], opts))
     my_depth = depth(mine.player_ids, opts)
 
     others
@@ -77,6 +93,23 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
       |> Enum.take(per_partner)
     end)
     |> Enum.sort_by(& &1.fit, :desc)
+  end
+
+  @doc """
+  Mean bodies per roster at each tradeable position, across the league.
+
+  Public because a caller showing "you hold 8, the league holds 5" needs the
+  same number the matching used, and recomputing it elsewhere is how the two
+  drift apart.
+  """
+  @spec league_average([roster], map) :: %{String.t() => float}
+  def league_average(rosters, opts) do
+    count = max(length(rosters), 1)
+
+    rosters
+    |> Enum.flat_map(fn roster -> Map.to_list(depth(roster.player_ids, opts)) end)
+    |> Enum.reduce(%{}, fn {pos, n}, acc -> Map.update(acc, pos, n, &(&1 + n)) end)
+    |> Map.new(fn {pos, total} -> {pos, total / count} end)
   end
 
   defp suggestions_against(mine, theirs, my_depth, opts) do
@@ -184,14 +217,14 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   end
 
   defp deep?(depth, position, opts) do
-    Map.get(depth, position, 0) > required(position, opts) + @depth_cushion
+    Map.get(depth, position, 0) > average(position, opts) + @depth_cushion
   end
 
   defp thin?(depth, position, opts) do
-    Map.get(depth, position, 0) <= required(position, opts)
+    Map.get(depth, position, 0) < average(position, opts) - @depth_cushion
   end
 
-  defp required(position, opts), do: Map.get(opts.starters, position, 0)
+  defp average(position, opts), do: Map.get(opts[:league_average] || %{}, position, 0)
 
   # How well a swap fits one roster: how many of the incoming players land at
   # a thin position, less any outgoing player that was not actually spare.
