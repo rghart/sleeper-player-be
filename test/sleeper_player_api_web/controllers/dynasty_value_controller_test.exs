@@ -62,15 +62,22 @@ defmodule SleeperPlayerApiWeb.DynastyValueControllerTest do
     # No row exactly 30 days back — a gap, or a series that starts late. The
     # comparison must fall back to the nearest earlier close rather than
     # reporting no movement, and must say which day it used.
+    #
+    # **Two candidates inside the lookback, deliberately.** With only one the
+    # seek's ORDER BY is unpinned: newest-first and oldest-first return the
+    # same row and reversing it leaves every test green. A sabotage run caught
+    # exactly that.
     seed_value(4984, "keeptradecut:sf", 6000.0, 1)
     seed_history(4984, "keeptradecut:sf", 5500.0, 40)
+    seed_history(4984, "keeptradecut:sf", 5800.0, 32)
     # Inside the window, so it must NOT be chosen as the baseline.
     seed_history(4984, "keeptradecut:sf", 5900.0, 3)
 
     body = conn |> get(~p"/api/v1/dynasty-values") |> json_response(200)
 
-    assert [%{"change" => 500.0, "since" => since}] = body["values"]
-    assert since == Date.to_iso8601(Date.add(Date.utc_today(), -40))
+    # 32 days back, not 40: the most recent close on or before the target.
+    assert [%{"change" => 200.0, "since" => since}] = body["values"]
+    assert since == Date.to_iso8601(Date.add(Date.utc_today(), -32))
   end
 
   test "ignores a close older than the lookback bound rather than calling it 30 days", %{
