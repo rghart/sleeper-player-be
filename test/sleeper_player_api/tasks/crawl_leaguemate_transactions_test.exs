@@ -499,6 +499,95 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
       assert ownership == %{{@alice, "6794"} => 1}
       assert leagues_seen == %{@alice => 1, @bob => 1}
     end
+
+    test "a league the crawl has stopped refreshing drops out of both sides", %{bypass: bypass} do
+      # The production case: the last tracked leaguemate leaves a league, so
+      # `/user/:id/leagues` stops listing it and `crawl_league/3` is never
+      # called for it again. Nothing deletes its rosters, so without this they
+      # keep counting forever, at whatever age they were abandoned.
+      stub(bypass, leagues_for: %{@alice => ["900", "901"], @bob => ["900"]})
+      stub_extra_league!(bypass, 901)
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      assert {_, %{@alice => 2}} = Intel.ownership(["4034"])
+
+      age_rosters!(901, 6)
+
+      assert {ownership, leagues_seen} = Intel.ownership(["4034"])
+
+      assert ownership == %{{@alice, "4034"} => 1, {@bob, "4034"} => 1},
+             "an abandoned league must leave the numerator"
+
+      assert leagues_seen == %{@alice => 1, @bob => 1},
+             "and the denominator with it — never 1 of 2 where the 2 is six days old"
+    end
+
+    test "one missed run is stale, not gone", %{bypass: bypass} do
+      # The crawl is nightly and a single failed `/league/:id/rosters` is
+      # routine. `ensure_roster_map/2` keeps the previous rows on purpose, and
+      # this must not undo that a night later.
+      stub(bypass, leagues_for: %{@alice => ["900", "901"], @bob => ["900"]})
+      stub_extra_league!(bypass, 901)
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      age_rosters!(901, 1)
+
+      assert {_, %{@alice => 2}} = Intel.ownership(["4034"])
+    end
+
+    test "a corpus-wide outage excludes nothing", %{bypass: bypass} do
+      # Why the cutoff is measured against the freshest row rather than the
+      # wall clock. Everything ages together during a Sleeper outage, and an
+      # absolute threshold would read that as nobody owning anybody — the
+      # read-time version of the failure `ensure_roster_map/2` refuses to
+      # write.
+      stub(bypass, leagues_for: %{@alice => ["900", "901"], @bob => ["900"]})
+      stub_extra_league!(bypass, 901)
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      age_rosters!(900, 6)
+      age_rosters!(901, 6)
+
+      assert {ownership, leagues_seen} = Intel.ownership(["4034"])
+      assert ownership == %{{@alice, "4034"} => 2, {@bob, "4034"} => 1}
+      assert leagues_seen == %{@alice => 2, @bob => 1}
+    end
+  end
+
+  # A second league for @alice, so that one can go stale while another stays
+  # current. The default `stub/2` only serves league 900.
+  defp stub_extra_league!(bypass, league_id) do
+    Bypass.stub(bypass, "GET", "/league/#{league_id}/rosters", fn conn ->
+      Plug.Conn.resp(
+        conn,
+        200,
+        Jason.encode!([%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034"]}])
+      )
+    end)
+
+    Bypass.stub(
+      bypass,
+      "GET",
+      "/league/#{league_id}/transactions/1",
+      &Plug.Conn.resp(&1, 200, "[]")
+    )
+  end
+
+  # Backdates a league's rosters as if the crawl had not reached it since.
+  defp age_rosters!(league_id, days) do
+    then =
+      DateTime.utc_now()
+      |> DateTime.add(-days * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    {count, _} =
+      Repo.update_all(
+        from(r in ObservedRoster, where: r.league_id == ^league_id),
+        set: [fetched_at: then]
+      )
+
+    assert count > 0, "nothing to age — the fixture never stored rosters for #{league_id}"
   end
 
   describe "failure behaviour" do
