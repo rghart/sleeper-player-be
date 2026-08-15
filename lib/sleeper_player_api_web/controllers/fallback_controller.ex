@@ -97,6 +97,32 @@ defmodule SleeperPlayerApiWeb.FallbackController do
     |> Phoenix.Controller.json(%{errors: %{detail: "no roster mapped for draft slot #{slot}"}})
   end
 
+  # The asking manager holds no roster in the league
+  # (`TradeController.index/2`). A 404 rather than an empty list, because
+  # "you are not in this league" and "no trades were found" are different
+  # answers and rendering them the same would have someone conclude their
+  # league is quiet when they are looking at the wrong league.
+  def call(conn, {:error, {:not_in_league, user_id}}) do
+    conn
+    |> put_status(:not_found)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{
+      errors: %{detail: "no roster in this league for user #{user_id}"}
+    })
+  end
+
+  # Sleeper answered, but not with the shape this endpoint needs. Distinct
+  # from a transport failure: retrying will not help, and it is the signal
+  # that their API changed under us.
+  def call(conn, {:error, {:upstream_shape, path}}) do
+    conn
+    |> put_status(:bad_gateway)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{
+      errors: %{detail: "unexpected response shape from Sleeper for #{path}"}
+    })
+  end
+
   # Anything else an action returns as `{:error, reason}` — e.g. the
   # `/league/:id/rosters` fetch in `Intel.availability/2` failing.
   def call(conn, {:error, reason}) do

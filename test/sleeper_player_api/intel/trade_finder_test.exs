@@ -132,6 +132,10 @@ defmodule SleeperPlayerApi.Intel.TradeFinderTest do
 
     test "never suggests a player it cannot price", ctx do
       # An unpriced asset would otherwise be silently treated as free.
+      #
+      # This asserts the behaviour, not a particular line: the guards in
+      # `spare/3` and `score/5` are redundant with each other, and removing
+      # either alone leaves this green. See the comment on `spare/3`.
       values = Map.delete(ctx.values, "my-rb4")
       found = TradeFinder.find(ctx.mine, [ctx.theirs], opts(ctx.positions, values))
 

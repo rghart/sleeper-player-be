@@ -168,6 +168,14 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   end
 
   # The players a roster could move without touching its starters.
+  #
+  # The `is_number` check here and the one in `score/5` are redundant with
+  # each other — either alone keeps an unpriced player out of a suggestion,
+  # and a sabotage run removing either left every test green. Both are kept
+  # because they guard different things: this one stops an unpriced asset
+  # becoming a candidate at all, and `score/5` stops a `nil` reaching
+  # `TradeValue`, where it would be an arithmetic error rather than a wrong
+  # answer. Neither is dead, but no test pins either individually.
   defp spare(player_ids, depth, opts) do
     Enum.filter(player_ids, fn id ->
       pos = position(id, opts)

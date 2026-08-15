@@ -24,6 +24,7 @@ defmodule SleeperPlayerApiWeb.Router do
     get "/dynasty-values", DynastyValueController, :index
     get "/drafts/:draft_id/availability", AvailabilityController, :show
     get "/leagues/:league_id/intel", IntelController, :show
+    get "/leagues/:league_id/trades", TradeController, :index
     get "/users/:user_id/activity", ManagerActivityController, :show
   end
 

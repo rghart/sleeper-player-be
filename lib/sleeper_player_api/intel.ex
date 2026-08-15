@@ -307,6 +307,27 @@ defmodule SleeperPlayerApi.Intel do
   defp history_row(_entry), do: []
 
   @doc """
+  `player_id -> position abbreviation` for the ids given.
+
+  A join rather than the full player dump: a league's rosters are ~400 ids
+  against a table of ~9,400 players, and the trade finder only needs the one
+  field. Ids come back as strings, matching how they travel everywhere else
+  in this API.
+  """
+  @spec player_positions([String.t() | integer]) :: %{String.t() => String.t()}
+  def player_positions(player_ids) do
+    ids = Enum.map(player_ids, &to_string/1)
+
+    from(p in SleeperPlayerApi.Sleeper.Player,
+      join: pos in assoc(p, :position),
+      where: p.player_id in ^ids,
+      select: {p.player_id, pos.abbreviation}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
   Upserts rookie draft pick values, keyed `(season, round, tier, source)`.
 
   Refreshed in place like `player_values`, and for the same reason: the
