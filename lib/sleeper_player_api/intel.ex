@@ -45,6 +45,7 @@ defmodule SleeperPlayerApi.Intel do
     DraftParticipant,
     ObservedLeague,
     ObservedRoster,
+    ObservedRosterHistory,
     ObservedTransaction,
     LeagueMember
   }
@@ -587,6 +588,67 @@ defmodule SleeperPlayerApi.Intel do
       replace: [:owner_id, :player_ids, :fetched_at, :updated_at]
     )
   end
+
+  @doc """
+  Appends the same roster rows to the daily history, keeping what
+  `upsert_observed_rosters/1` is about to overwrite.
+
+  The exact counterpart of `record_value_history/1`, and it follows the same
+  three rules for the same reasons.
+
+  Takes exactly what `upsert_observed_rosters/1` takes, so the caller shapes
+  its rows once and writes them to both places rather than the crawler having
+  to know there are two, and so the two can never disagree about what was
+  observed.
+
+  `day` is derived from each row's own `fetched_at` rather than from
+  `Date.utc_today/0`, so a crawl that straddles midnight, and any future
+  backfill, land on the day they describe instead of the day they ran. Rows
+  carrying no `fetched_at` are dropped: there is no day to file them under,
+  and guessing one would silently overwrite a real snapshot.
+
+  Last write of a day wins, which makes each row that day's close. Re-running
+  a crawl corrects the day rather than duplicating it.
+
+  Deduplicated by `(league_id, roster_id, day)` before insert, last occurrence
+  winning — Postgres refuses an `ON CONFLICT DO UPDATE` that touches one row
+  twice in a statement, so a payload repeating a `roster_id` would fail the
+  whole batch rather than merely writing twice. Sleeper has not been seen to
+  do that, but the constraint belongs to the table, not to the one caller
+  that currently feeds it.
+  """
+  @spec append_observed_roster_history([map]) :: {non_neg_integer, nil}
+  def append_observed_roster_history(rosters) do
+    rows =
+      rosters
+      |> Enum.flat_map(&roster_history_row/1)
+      |> Enum.reduce(%{}, fn row, acc ->
+        Map.put(acc, {row.league_id, row.roster_id, row.day}, row)
+      end)
+      |> Map.values()
+
+    insert_all_batched(
+      ObservedRosterHistory,
+      rows,
+      conflict_target: [:league_id, :roster_id, :day],
+      replace: [:owner_id, :player_ids, :fetched_at, :updated_at]
+    )
+  end
+
+  defp roster_history_row(%{fetched_at: %DateTime{} = fetched_at} = row) do
+    [
+      %{
+        league_id: row.league_id,
+        roster_id: row.roster_id,
+        day: DateTime.to_date(fetched_at),
+        owner_id: row[:owner_id],
+        player_ids: row[:player_ids] || [],
+        fetched_at: fetched_at
+      }
+    ]
+  end
+
+  defp roster_history_row(_row), do: []
 
   @doc """
   Per-manager ownership: how many of each manager's leagues hold each player.

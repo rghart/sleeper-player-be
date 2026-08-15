@@ -5,7 +5,14 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
   use SleeperPlayerApi.DataCase, async: false
 
   alias SleeperPlayerApi.Intel
-  alias SleeperPlayerApi.Intel.{ObservedLeague, ObservedRoster, ObservedTransaction}
+
+  alias SleeperPlayerApi.Intel.{
+    ObservedLeague,
+    ObservedRoster,
+    ObservedRosterHistory,
+    ObservedTransaction
+  }
+
   alias SleeperPlayerApi.Repo
   alias SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions
 
@@ -278,6 +285,176 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
 
       assert {%{{@alice, "4034"} => 1}, _} = Intel.ownership(["4034"]),
              "a brief Sleeper failure must read as stale, not as 'nobody owns anybody'"
+    end
+  end
+
+  describe "roster history (the time series the crawl used to discard)" do
+    test "the crawl records each roster's contents against the day it saw them", %{
+      bypass: bypass
+    } do
+      stub(bypass)
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      rows = Repo.all(from(h in ObservedRosterHistory, order_by: h.roster_id))
+
+      assert [
+               %{roster_id: 1, owner_id: @alice, player_ids: ["4034", "6794"], league_id: 900},
+               %{roster_id: 2, owner_id: @bob, player_ids: ["4034"], league_id: 900}
+             ] = rows
+
+      # The day is the one the observation carries, not whatever the clock
+      # said when the row was written.
+      assert Enum.all?(rows, &(&1.day == DateTime.to_date(&1.fetched_at)))
+    end
+
+    # The entire reason the table exists. `observed_rosters` is overwritten in
+    # place, so before this the previous contents were simply gone — and a
+    # roster as it stood *then* is the only thing that can validate a read of
+    # positional need made at the time.
+    test "yesterday's roster survives today's overwrite", %{bypass: bypass} do
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034", "6794"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      # Age the stored snapshot by a day. The crawl stamps `fetched_at` from
+      # the clock, so this is the only way to get two days out of two runs
+      # inside one test.
+      yesterday = Date.add(Date.utc_today(), -1)
+
+      Repo.update_all(ObservedRosterHistory,
+        set: [day: yesterday, fetched_at: DateTime.new!(yesterday, ~T[04:30:00Z])]
+      )
+
+      Bypass.down(bypass)
+      bypass = Bypass.open(port: bypass.port)
+
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      assert [{^yesterday, ["4034", "6794"]}, {_today, ["4034"]}] =
+               Repo.all(
+                 from(h in ObservedRosterHistory,
+                   order_by: h.day,
+                   select: {h.day, h.player_ids}
+                 )
+               )
+
+      assert [%{player_ids: ["4034"]}] = Repo.all(ObservedRoster),
+             "the current-snapshot table still holds only the latest"
+    end
+
+    test "a second crawl on the same day corrects the day rather than duplicating it", %{
+      bypass: bypass
+    } do
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      Bypass.down(bypass)
+      bypass = Bypass.open(port: bypass.port)
+
+      stub(bypass,
+        rosters: [%{"roster_id" => 1, "owner_id" => "#{@alice}", "players" => ["4034", "6794"]}]
+      )
+
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      assert [%{player_ids: ["4034", "6794"]}] = Repo.all(ObservedRosterHistory),
+             "a day holds one row, and it is that day's close"
+    end
+
+    # What makes a point-in-time read of this table sound: a day with no row
+    # means "we never looked", so a failed fetch must write nothing.
+    #
+    # Two leagues, one of which fails, because asserting only that the failing
+    # league wrote nothing is over-determined — it stays green when the append
+    # is deleted outright (confirmed by sabotage). The league that succeeded
+    # has to be in the same run for the assertion to be about the failure.
+    test "a failed roster fetch writes no history row, while its neighbour still does", %{
+      bypass: bypass
+    } do
+      stub(bypass, leagues_for: %{@alice => ["900", "901"], @bob => ["900"]})
+
+      Bypass.stub(bypass, "GET", "/league/901/rosters", &Plug.Conn.resp(&1, 500, "nope"))
+
+      Bypass.stub(bypass, "GET", "/league/901/transactions/1", fn conn ->
+        Plug.Conn.resp(conn, 200, "[]")
+      end)
+
+      assert {:ok, summary} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+      assert [{:rosters_failed, 901, _}] = summary.errors
+
+      assert [900, 900] =
+               Repo.all(
+                 from(h in ObservedRosterHistory, select: h.league_id, order_by: h.roster_id)
+               )
+    end
+  end
+
+  # Two rules the crawler cannot reach: it always stamps `fetched_at`, and
+  # Sleeper has never been seen to repeat a `roster_id` in one payload.
+  describe "append_observed_roster_history/1" do
+    setup do
+      Intel.upsert_observed_leagues([%{id: 900, season: "2026"}])
+      :ok
+    end
+
+    # The crawler always hands over `fetched_at == now`, so nothing reachable
+    # through it can tell `DateTime.to_date(fetched_at)` apart from
+    # `Date.utc_today()`. This is the only test that can.
+    test "files a row under the day it was observed, not the day it was written" do
+      yesterday = Date.add(Date.utc_today(), -1)
+
+      assert {1, _} =
+               Intel.append_observed_roster_history([
+                 %{
+                   league_id: 900,
+                   roster_id: 1,
+                   player_ids: ["1"],
+                   fetched_at: DateTime.new!(yesterday, ~T[04:30:00Z])
+                 }
+               ])
+
+      assert [%{day: ^yesterday}] = Repo.all(ObservedRosterHistory)
+    end
+
+    test "a row with no fetched_at is dropped rather than dated by guesswork" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert {1, _} =
+               Intel.append_observed_roster_history([
+                 %{
+                   league_id: 900,
+                   roster_id: 1,
+                   owner_id: @alice,
+                   player_ids: ["1"],
+                   fetched_at: now
+                 },
+                 %{league_id: 900, roster_id: 2, owner_id: @bob, player_ids: ["2"]}
+               ])
+
+      assert [%{roster_id: 1}] = Repo.all(ObservedRosterHistory)
+    end
+
+    test "one roster twice in a single call collapses, last one winning" do
+      # Postgres refuses an ON CONFLICT DO UPDATE that touches a row twice in
+      # one statement, so without the dedupe this does not write twice — it
+      # fails the whole batch, taking the rest of the league with it.
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      row = fn players ->
+        %{league_id: 900, roster_id: 1, player_ids: players, fetched_at: now}
+      end
+
+      assert {1, _} = Intel.append_observed_roster_history([row.(["1"]), row.(["1", "2"])])
+      assert [%{player_ids: ["1", "2"]}] = Repo.all(ObservedRosterHistory)
     end
   end
 
