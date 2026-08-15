@@ -254,7 +254,14 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
           %{id: league_id, roster_to_user: map, rosters_fetched_at: now}
         ])
 
-        Intel.upsert_observed_rosters(roster_rows(league_id, rosters, now))
+        rows = roster_rows(league_id, rosters, now)
+
+        # Both writes take the same rows: one keeps the current snapshot, the
+        # other keeps the day's. Appending only on the failure-free path is
+        # deliberate — a day with no history row must mean "we never looked",
+        # which is what makes a point-in-time read of the history sound.
+        Intel.upsert_observed_rosters(rows)
+        Intel.append_observed_roster_history(rows)
 
         {map, %{summary | rosters_fetched: summary.rosters_fetched + 1}}
 
