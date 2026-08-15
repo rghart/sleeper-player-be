@@ -51,7 +51,11 @@ defmodule SleeperPlayerApiWeb.TradeController do
         league_id: league_id,
         suggestions: TradeFinder.find(mine, others, opts),
         depth: TradeFinder.depth(mine.player_ids, opts),
-        starters: opts.starters
+        starters: opts.starters,
+        # The number depth is actually compared against. Sending `starters`
+        # without it would show the caller the wrong yardstick — starters no
+        # longer decide deep or thin.
+        league_average: TradeFinder.league_average([mine | others], opts)
       )
     end
   end

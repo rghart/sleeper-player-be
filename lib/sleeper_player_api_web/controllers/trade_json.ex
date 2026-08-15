@@ -25,12 +25,20 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
         league_id: league_id,
         suggestions: suggestions,
         depth: depth,
-        starters: starters
+        starters: starters,
+        league_average: league_average
       }) do
     %{
       source: source,
       leagueId: to_string(league_id),
-      rosterShape: %{depth: depth, starters: starters},
+      rosterShape: %{
+        depth: depth,
+        starters: starters,
+        # What `depth` is measured against. `starters` is here for display —
+        # "you start 2" — but it is `leagueAverage` that decides deep or thin,
+        # and showing one without the other points at the wrong yardstick.
+        leagueAverage: league_average
+      },
       suggestions: Enum.map(suggestions, &suggestion/1)
     }
   end
