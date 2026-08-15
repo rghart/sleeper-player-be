@@ -39,6 +39,8 @@ defmodule SleeperPlayerApiWeb.PlayerJSON do
       first_name: player.first_name,
       last_name: player.last_name,
       full_name: player.full_name,
+      injury_status: player.injury_status,
+      injury_body_part: player.injury_body_part,
       player_id: player.player_id,
       position: if(player.position, do: player.position.abbreviation, else: nil),
       search_first_name: player.search_first_name,

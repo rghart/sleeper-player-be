@@ -22,6 +22,8 @@ defmodule SleeperPlayerApi.Sleeper do
     :search_full_name,
     :search_rank,
     :years_exp,
+    :injury_status,
+    :injury_body_part,
     :status_id,
     :team_id,
     :position_id,

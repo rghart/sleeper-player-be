@@ -17,6 +17,18 @@ defmodule SleeperPlayerApiWeb.PlayerControllerTest do
       conn = get(conn, ~p"/api/v1/players/active")
       assert json_response(conn, 200)["data"] == []
     end
+
+    # Injury comes from Sleeper's own dump rather than from a value source, so
+    # this endpoint is where the frontend reads it — see the migration.
+    test "carries the injury fields the dump extracts", %{conn: conn} do
+      SleeperPlayerApi.SleeperFixtures.player_fixture(%{
+        injury_status: "Questionable",
+        injury_body_part: "Hamstring"
+      })
+
+      assert [%{"injury_status" => "Questionable", "injury_body_part" => "Hamstring"}] =
+               conn |> get(~p"/api/v1/players/active") |> json_response(200) |> Map.get("data")
+    end
   end
 
   #  @create_attrs %{

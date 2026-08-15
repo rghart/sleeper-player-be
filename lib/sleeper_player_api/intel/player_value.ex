@@ -19,6 +19,16 @@ defmodule SleeperPlayerApi.Intel.PlayerValue do
     # CLASS", not the full player pool.
     field :draft_year, :integer
 
+    # KeepTradeCut only; see the migration that added them.
+    #
+    # `liquidity` (KTC's `stdLiquidity`, 0-100) is per-format and belongs on
+    # this row. `injury_return` and `bye_week` are facts about the player and
+    # are the same on both format rows — duplicated rather than given a second
+    # writer into `players`, which the Sleeper dump owns.
+    field :liquidity, :float
+    field :injury_return, :date
+    field :bye_week, :integer
+
     timestamps()
   end
 
@@ -34,7 +44,10 @@ defmodule SleeperPlayerApi.Intel.PlayerValue do
       :roster_percent,
       :trade_frequency,
       :as_of,
-      :draft_year
+      :draft_year,
+      :liquidity,
+      :injury_return,
+      :bye_week
     ])
     |> validate_required([:player_id, :source])
     |> unique_constraint([:player_id, :source])

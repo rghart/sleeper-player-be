@@ -19,6 +19,12 @@ defmodule SleeperPlayerApi.Sleeper.Player do
     field :search_rank, :integer
     field :years_exp, :integer
 
+    # Sleeper carries these on every player in `/players/nfl` and the dump has
+    # always stored them inside `player_json` without extracting them. See the
+    # migration: this is where injury data comes from, not from KeepTradeCut.
+    field :injury_status, :string
+    field :injury_body_part, :string
+
     belongs_to :team, Team, on_replace: :update
     belongs_to :position, Position, on_replace: :update
     belongs_to :status, Status, on_replace: :update
@@ -44,6 +50,8 @@ defmodule SleeperPlayerApi.Sleeper.Player do
       :search_full_name,
       :search_rank,
       :years_exp,
+      :injury_status,
+      :injury_body_part,
       :position_id,
       :status_id,
       :team_id
