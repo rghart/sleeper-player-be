@@ -37,6 +37,13 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   average a roster has to sit before it counts either way, so a rounding
   difference is not a trade thesis.
 
+  **Picks are sweeteners, never the object of the trade.** The fit test is
+  positional and a pick has no position, so trading picks *for* players would
+  need a contending-versus-rebuilding signal that nothing here has. What it
+  does instead is what actually closes real dynasty trades: when a player swap
+  is nearly fair but one side is light, the light side may add one pick to
+  close the gap. Fit is still decided entirely by the players.
+
   The model is still crude and still says so: it counts bodies, not quality,
   and does not run a lineup optimiser, so FLEX is not modelled. SUPER_FLEX
   *is* counted as a quarterback slot for the starting requirement, matching
@@ -154,19 +161,25 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
     get_values = Enum.map(get, &value(&1, opts))
 
     with true <- Enum.all?(give_values ++ get_values, &is_number/1),
-         evaluation = TradeValue.evaluate(give_values, get_values, opts.top_value),
-         true <- fair?(evaluation),
+         # Fit is decided on the players alone, before any sweetener — a pick
+         # has no position and must not be able to manufacture a fit.
          my_fit = fit_for(give, get, my_depth, opts),
          their_fit = fit_for(get, give, their_depth, opts),
          # Both sides, not just the asking one. A trade only you want is a
          # trade that does not happen.
-         true <- my_fit > 0 and their_fit > 0 do
+         true <- my_fit > 0 and their_fit > 0,
+         {:ok, sweetener, evaluation} <-
+           balance(give_values, get_values, theirs, mine_holdings(opts), opts) do
+      {give_picks, get_picks} = sweetener
+
       [
         %{
           partner_id: to_string(theirs.user_id),
           partner_name: theirs.display_name,
           give: give,
           get: get,
+          give_picks: give_picks,
+          get_picks: get_picks,
           give_value: evaluation.one.adjusted,
           get_value: evaluation.two.adjusted,
           raw_gap: evaluation.raw_gap,
@@ -179,6 +192,60 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
     else
       _ -> []
     end
+  end
+
+  # Fair as it stands, or fair once the lighter side adds one pick it owns.
+  #
+  # Only one pick, and only from the side that is behind: a search over
+  # combinations of picks would find a way to balance almost anything, which
+  # is how a trade tool starts producing offers nobody would send.
+  defp balance(give_values, get_values, theirs, my_picks, opts) do
+    plain = TradeValue.evaluate(give_values, get_values, opts.top_value)
+
+    cond do
+      fair?(plain) ->
+        {:ok, {[], []}, plain}
+
+      # I am getting more than I give, so I add a pick.
+      plain.one.adjusted < plain.two.adjusted ->
+        sweeten(give_values, get_values, my_picks, opts, :mine)
+
+      true ->
+        sweeten(give_values, get_values, picks_of(theirs, opts), opts, :theirs)
+    end
+  end
+
+  defp sweeten(give_values, get_values, picks, opts, side) do
+    picks
+    |> Enum.map(fn pick -> {pick, pick_value(pick, opts)} end)
+    |> Enum.filter(fn {_pick, value} -> is_number(value) end)
+    |> Enum.map(fn {pick, value} ->
+      evaluation =
+        case side do
+          :mine -> TradeValue.evaluate(give_values ++ [value], get_values, opts.top_value)
+          :theirs -> TradeValue.evaluate(give_values, get_values ++ [value], opts.top_value)
+        end
+
+      {pick, evaluation}
+    end)
+    |> Enum.filter(fn {_pick, evaluation} -> fair?(evaluation) end)
+    # The smallest pick that closes it. Throwing in a first when a fourth
+    # would do is not a trade anybody accepts.
+    |> Enum.min_by(fn {_pick, evaluation} -> abs(evaluation.adjusted_gap) end, fn -> nil end)
+    |> case do
+      nil -> :none
+      {pick, evaluation} when side == :mine -> {:ok, {[pick], []}, evaluation}
+      {pick, evaluation} -> {:ok, {[], [pick]}, evaluation}
+    end
+  end
+
+  defp mine_holdings(opts), do: Map.get(opts, :my_picks, [])
+
+  defp picks_of(roster, opts),
+    do: Map.get(opts[:picks_by_user] || %{}, to_string(roster.user_id), [])
+
+  defp pick_value(%{season: season, round: round}, opts) do
+    Map.get(opts[:pick_values] || %{}, {season, round})
   end
 
   defp fair?(%{one: %{adjusted: a}, two: %{adjusted: b}}) do

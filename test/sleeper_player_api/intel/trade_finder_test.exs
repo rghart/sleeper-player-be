@@ -202,6 +202,101 @@ defmodule SleeperPlayerApi.Intel.TradeFinderTest do
       assert average["WR"] == 3.0
     end
 
+    test "adds a pick from my side when I would otherwise be getting more", ctx do
+      # Their receiver is worth more than my back, so the swap is outside the
+      # fairness band on its own, and a pick I own closes it.
+      #
+      # The pick values here are not arbitrary. A sweetener is itself
+      # discounted by `TradeValue`, so it contributes roughly a tenth of its
+      # raw value — a fourth-rounder cannot close a gap of this size, and a
+      # first overshoots it into being unfair the other way. Only the middle
+      # pick lands inside the band, which is the point: this cannot rescue
+      # any trade you like.
+      values =
+        Map.new(ctx.values, fn {id, v} ->
+          {id, if(String.starts_with?(id, "th-wr"), do: 7000, else: v)}
+        end)
+
+      overrides = %{
+        my_picks: [
+          %{season: 2027, round: 1},
+          %{season: 2027, round: 2},
+          %{season: 2027, round: 4}
+        ],
+        pick_values: %{{2027, 1} => 6000, {2027, 2} => 4200, {2027, 4} => 1800},
+        # A sweetened 1-for-1 fits less well than an unsweetened 2-for-1
+        # (the 2-for-1 fills two of their holes), so the default cap of three
+        # hides every sweetened trade. Raised here to see them at all.
+        per_partner: 50
+      }
+
+      found = TradeFinder.find(ctx.mine, [ctx.theirs], opts(ctx.positions, values, overrides))
+
+      # Any sweetened suggestion, not the top-ranked one: the highest-*fit*
+      # trade here is a 2-for-1 that is already fair and needs no sweetener at
+      # all. The sweetener is what rescues the 1-for-1.
+      sweetened = Enum.filter(found, &(&1.give_picks != []))
+
+      assert sweetened != []
+      assert Enum.all?(sweetened, &(&1.get_picks == []))
+      assert Enum.all?(sweetened, &(&1.give_picks == [%{season: 2027, round: 2}]))
+    end
+
+    test "adds a pick from their side when they are the ones behind", ctx do
+      values =
+        Map.new(ctx.values, fn {id, v} ->
+          {id, if(String.starts_with?(id, "my-rb"), do: 7000, else: v)}
+        end)
+
+      overrides = %{
+        picks_by_user: %{"2" => [%{season: 2027, round: 2}]},
+        pick_values: %{{2027, 2} => 4200},
+        per_partner: 50
+      }
+
+      found = TradeFinder.find(ctx.mine, [ctx.theirs], opts(ctx.positions, values, overrides))
+
+      assert Enum.any?(found, &(&1.get_picks == [%{season: 2027, round: 2}]))
+    end
+
+    test "a pick cannot manufacture a fit that the players do not have", ctx do
+      # They are deep at running back too, so no player swap fits. A pick
+      # closing the value gap must not rescue it — fit is decided before any
+      # sweetener, on the players alone.
+      their_rbs = %{"th-rb3" => "RB", "th-rb4" => "RB", "th-rb5" => "RB"}
+      positions = Map.merge(ctx.positions, their_rbs)
+      values = Map.merge(ctx.values, Map.new(Map.keys(their_rbs), &{&1, 5000}))
+      theirs = %{ctx.theirs | player_ids: ctx.theirs.player_ids ++ Map.keys(their_rbs)}
+
+      overrides = %{
+        my_picks: [%{season: 2027, round: 1}],
+        pick_values: %{{2027, 1} => 6000}
+      }
+
+      found = TradeFinder.find(ctx.mine, [theirs], opts(positions, values, overrides))
+
+      refute Enum.any?(found, fn s -> Enum.all?(s.give, &(positions[&1] == "RB")) end)
+    end
+
+    test "a pick nobody prices is never offered", ctx do
+      values =
+        Map.new(ctx.values, fn {id, v} ->
+          {id, if(String.starts_with?(id, "th-wr"), do: 7000, else: v)}
+        end)
+
+      overrides = %{my_picks: [%{season: 2029, round: 1}], pick_values: %{}}
+      found = TradeFinder.find(ctx.mine, [ctx.theirs], opts(ctx.positions, values, overrides))
+
+      refute Enum.any?(found, &(&1.give_picks != []))
+    end
+
+    test "carries empty pick lists when no sweetener was needed", ctx do
+      [best | _] = TradeFinder.find(ctx.mine, [ctx.theirs], opts(ctx.positions, ctx.values))
+
+      assert best.give_picks == []
+      assert best.get_picks == []
+    end
+
     test "returns nothing rather than erroring when there is no partner", ctx do
       assert TradeFinder.find(ctx.mine, [], opts(ctx.positions, ctx.values)) == []
     end

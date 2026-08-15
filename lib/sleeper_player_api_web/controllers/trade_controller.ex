@@ -3,6 +3,7 @@ defmodule SleeperPlayerApiWeb.TradeController do
 
   alias SleeperPlayerApi.Client.Sleeper
   alias SleeperPlayerApi.Intel
+  alias SleeperPlayerApi.Intel.PickHoldings
   alias SleeperPlayerApi.Intel.TradeFinder
 
   action_fallback SleeperPlayerApiWeb.FallbackController
@@ -34,8 +35,24 @@ defmodule SleeperPlayerApiWeb.TradeController do
          {:ok, rosters} <- fetch(league_id, "rosters"),
          {:ok, users} <- fetch(league_id, "users"),
          {:ok, league} <- fetch_league(league_id),
+         {:ok, drafts} <- fetch(league_id, "drafts"),
+         {:ok, traded} <- fetch(league_id, "traded_picks"),
          {:ok, mine, others} <- split(rosters, users, user_id) do
       values = value_lookup(source)
+      pick_values = pick_value_lookup(source)
+
+      # Picks are keyed to rosters by Sleeper and to managers by this app, so
+      # the holdings are re-keyed by owning user before the finder sees them.
+      owners = Map.new(rosters, fn r -> {r["roster_id"], to_string(r["owner_id"])} end)
+
+      holdings =
+        PickHoldings.build(drafts, traded, priced_seasons(pick_values),
+          rounds: draft_rounds(league),
+          roster_ids: Map.keys(owners)
+        )
+
+      picks_by_user =
+        Map.new(holdings, fn {roster_id, picks} -> {Map.get(owners, roster_id), picks} end)
 
       opts = %{
         positions: Intel.player_positions(roster_player_ids(rosters)),
@@ -43,7 +60,10 @@ defmodule SleeperPlayerApiWeb.TradeController do
         starters: TradeFinder.starters(league["roster_positions"]),
         # The board's most valuable asset sets TradeValue's scale. Taken from
         # the price list rather than hardcoded, so it moves with the market.
-        top_value: values |> Map.values() |> Enum.max(fn -> 0 end)
+        top_value: values |> Map.values() |> Enum.max(fn -> 0 end),
+        pick_values: pick_values,
+        picks_by_user: picks_by_user,
+        my_picks: Map.get(picks_by_user, user_id, [])
       }
 
       render(conn, :index,
@@ -110,6 +130,28 @@ defmodule SleeperPlayerApiWeb.TradeController do
     |> Enum.map(&to_string/1)
     |> Enum.uniq()
   end
+
+  # Mid tier throughout: a Sleeper traded pick carries a season and a round
+  # and nothing else, and which tier it becomes depends on where that roster
+  # finishes. Mid is the honest single answer — see the `draft_pick_values`
+  # migration for why all three are stored rather than one being chosen at
+  # write time.
+  @assumed_tier "mid"
+
+  defp pick_value_lookup(source) do
+    source
+    |> Intel.draft_pick_values()
+    |> Enum.filter(&(&1.tier == @assumed_tier))
+    |> Map.new(fn p -> {{p.season, p.round}, p.value} end)
+  end
+
+  defp priced_seasons(pick_values) do
+    pick_values |> Map.keys() |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+  end
+
+  # Sleeper puts the rookie-draft round count on the league settings; four is
+  # the common default and what KeepTradeCut prices out to.
+  defp draft_rounds(league), do: get_in(league, ["settings", "draft_rounds"]) || 4
 
   defp value_lookup(source) do
     source

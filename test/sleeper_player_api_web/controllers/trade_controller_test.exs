@@ -88,6 +88,20 @@ defmodule SleeperPlayerApiWeb.TradeControllerTest do
       )
     end)
 
+    # The 2027 draft has not happened, so 2027 picks are tradeable; 2026's is
+    # complete, which is what stops a spent pick being offered.
+    Bypass.stub(bypass, "GET", "/league/#{@league}/drafts", fn conn ->
+      Plug.Conn.resp(
+        conn,
+        200,
+        Jason.encode!(Keyword.get(opts, :drafts, [%{"season" => "2026", "status" => "complete"}]))
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/league/#{@league}/traded_picks", fn conn ->
+      Plug.Conn.resp(conn, 200, Jason.encode!(Keyword.get(opts, :traded, [])))
+    end)
+
     Bypass.stub(bypass, "GET", "/league/#{@league}", fn conn ->
       Plug.Conn.resp(
         conn,

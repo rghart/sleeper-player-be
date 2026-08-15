@@ -49,6 +49,11 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
       partnerName: s.partner_name,
       give: s.give,
       get: s.get,
+      # Separate arrays rather than mixed into `give`/`get`: those hold
+      # Sleeper player ids and a pick is not a player, the same split that
+      # keeps `draft_pick_values` out of `player_values`.
+      givePicks: Enum.map(s.give_picks || [], &pick/1),
+      getPicks: Enum.map(s.get_picks || [], &pick/1),
       giveValue: round_to(s.give_value),
       getValue: round_to(s.get_value),
       rawGap: round_to(s.raw_gap),
@@ -56,6 +61,13 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
       myFit: s.my_fit,
       theirFit: s.their_fit
     }
+  end
+
+  # `tier` travels even though it is always "mid" today: the caller is
+  # rendering "2027 2nd" and the tier is the part of that claim it did not
+  # get to choose.
+  defp pick(%{season: season, round: round}) do
+    %{season: season, round: round, tier: "mid"}
   end
 
   # Whole numbers on the wire. These are adjusted values on a 0-10,000 scale
