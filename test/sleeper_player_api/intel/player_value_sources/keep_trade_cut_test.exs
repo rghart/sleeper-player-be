@@ -17,8 +17,22 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
       "position" => "RB",
       "draftYear" => 2023,
       "mflid" => 16_162,
-      "oneQBValues" => %{"value" => 9999, "rank" => 1, "positionalRank" => 1},
-      "superflexValues" => %{"value" => 9997, "rank" => 1, "positionalRank" => 1}
+      "byeWeek" => 6,
+      # The healthy shape, and the common one: 425 of 500 entries carry an
+      # `injuryCode` and nothing else (measured 2026-08-15).
+      "injury" => %{"injuryCode" => 1},
+      "oneQBValues" => %{
+        "value" => 9999,
+        "rank" => 1,
+        "positionalRank" => 1,
+        "stdLiquidity" => 41.0
+      },
+      "superflexValues" => %{
+        "value" => 9997,
+        "rank" => 1,
+        "positionalRank" => 1,
+        "stdLiquidity" => 35.0
+      }
     },
     %{
       "playerName" => "Zay Flowers",
@@ -26,8 +40,26 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
       "position" => "WR",
       "draftYear" => 2023,
       "mflid" => 16_190,
-      "oneQBValues" => %{"value" => 6012, "rank" => 24, "positionalRank" => 12},
-      "superflexValues" => %{"value" => 5359, "rank" => 41, "positionalRank" => 18}
+      "byeWeek" => 11,
+      # The injured shape, verbatim from the live payload.
+      "injury" => %{
+        "injuryArea" => "Hamstring",
+        "injuryCode" => 2,
+        "injuryName" => "Questionable",
+        "injuryReturn" => "Aug 22, 2026"
+      },
+      "oneQBValues" => %{
+        "value" => 6012,
+        "rank" => 24,
+        "positionalRank" => 12,
+        "stdLiquidity" => 12.0
+      },
+      "superflexValues" => %{
+        "value" => 5359,
+        "rank" => 41,
+        "positionalRank" => 18,
+        "stdLiquidity" => 9.0
+      }
     },
     %{
       "playerName" => "2027 Early 1st",
@@ -143,6 +175,66 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
 
     assert {:ok, entries} = KeepTradeCut.fetch_values()
     assert Enum.all?(entries, &(&1.roster_percent == nil and &1.trade_frequency == nil))
+  end
+
+  test "liquidity is shaped per format, not once per player", %{bypass: bypass} do
+    # The reason it lives on the value row rather than beside `bye_week`: KTC
+    # prices how tradeable a player is separately for 1QB and superflex, and
+    # collapsing the two would report one league's market to the other.
+    stub(bypass, @players)
+
+    assert {:ok, entries} = KeepTradeCut.fetch_values()
+
+    assert [%{liquidity: 41.0}, %{liquidity: 35.0}] =
+             entries |> Enum.filter(&(&1.player_id == 9509)) |> Enum.sort_by(& &1.source)
+  end
+
+  test "an expected return is stored as a date, and the bye week travels with it", %{
+    bypass: bypass
+  } do
+    stub(bypass, @players)
+
+    assert {:ok, entries} = KeepTradeCut.fetch_values()
+    flowers = Enum.filter(entries, &(&1.player_id == 9500))
+
+    # A date rather than KTC's "Aug 22, 2026" string, so a return already in
+    # the past can be told from one still ahead.
+    assert Enum.all?(flowers, &(&1.injury_return == ~D[2026-08-22]))
+
+    # Per-player, so the same on both format rows — unlike liquidity above.
+    assert Enum.all?(flowers, &(&1.bye_week == 11))
+  end
+
+  test "a healthy player carries no return date at all", %{bypass: bypass} do
+    # `%{"injuryCode" => 1}` is the healthy majority, and it must read as "no
+    # date" rather than as a date the parser invented.
+    stub(bypass, @players)
+
+    assert {:ok, entries} = KeepTradeCut.fetch_values()
+    gibbs = Enum.filter(entries, &(&1.player_id == 9509))
+
+    assert Enum.all?(gibbs, &(&1.injury_return == nil))
+    assert Enum.all?(gibbs, &(&1.bye_week == 6))
+  end
+
+  test "a return date KTC words differently is dropped, not guessed at", %{bypass: bypass} do
+    # Same rule as `parse_pick/1`: a value that does not parse means the feed
+    # changed, and that should surface as a missing date rather than a wrong
+    # one. "Week 4" and "TBD" are the shapes a date field tends to drift into.
+    odd =
+      Enum.map(@players, fn p ->
+        if p["mflid"] == 16_190,
+          do: Map.put(p, "injury", %{"injuryCode" => 2, "injuryReturn" => "Week 4"}),
+          else: p
+      end)
+
+    stub(bypass, odd)
+
+    assert {:ok, entries} = KeepTradeCut.fetch_values()
+
+    assert entries
+           |> Enum.filter(&(&1.player_id == 9500))
+           |> Enum.all?(&(&1.injury_return == nil))
   end
 
   test "a player the crosswalk cannot resolve is dropped, not failed over", %{bypass: bypass} do

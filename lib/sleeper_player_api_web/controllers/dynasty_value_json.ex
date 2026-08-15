@@ -40,7 +40,13 @@ defmodule SleeperPlayerApiWeb.DynastyValueJSON do
       # unknown are different answers and the UI renders them differently.
       change: v.change,
       changePct: v.change_pct,
-      since: v.since
+      since: v.since,
+      # KTC only, and `null` on a FantasyCalc row rather than 0 — the same
+      # flat-vs-unknown rule `change` follows. `liquidity` is how tradeable
+      # the market finds him (0-100), which is not what `value` says.
+      liquidity: v.liquidity,
+      injuryReturn: v.injury_return,
+      byeWeek: v.bye_week
     }
   end
 

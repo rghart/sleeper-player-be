@@ -135,6 +135,40 @@ defmodule SleeperPlayerApiWeb.DynastyValueControllerTest do
     assert [%{"change" => 3000.0}] = body["values"]
   end
 
+  test "liquidity, expected return and bye week reach the wire", %{conn: conn} do
+    # These come from KTC and nothing else does the shaping, so the endpoint
+    # contract is the only place the whole path is pinned end to end.
+    Intel.upsert_player_values([
+      %{
+        player_id: 4984,
+        source: "keeptradecut:sf",
+        value: 6000.0,
+        overall_rank: 1,
+        position_rank: 1,
+        as_of: DateTime.utc_now() |> DateTime.truncate(:second),
+        liquidity: 12.5,
+        injury_return: ~D[2026-08-22],
+        bye_week: 11
+      }
+    ])
+
+    body = conn |> get(~p"/api/v1/dynasty-values") |> json_response(200)
+
+    assert [%{"liquidity" => 12.5, "injuryReturn" => "2026-08-22", "byeWeek" => 11}] =
+             body["values"]
+  end
+
+  test "a value without them sends null rather than zero", %{conn: conn} do
+    # Same flat-vs-unknown rule `change` follows. FantasyCalc rows carry no
+    # liquidity at all, and 0.0 would read as "never traded" rather than "not
+    # measured here"; `seed_value/4` shapes a row the same way, without them.
+    seed_value(4984, "keeptradecut:sf", 6000.0, 1)
+
+    body = conn |> get(~p"/api/v1/dynasty-values") |> json_response(200)
+
+    assert [%{"liquidity" => nil, "injuryReturn" => nil, "byeWeek" => nil}] = body["values"]
+  end
+
   test "picks come back alongside the players", %{conn: conn} do
     Intel.upsert_draft_pick_values([
       %{

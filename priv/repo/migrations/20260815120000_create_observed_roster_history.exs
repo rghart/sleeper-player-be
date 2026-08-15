@@ -24,10 +24,13 @@ defmodule SleeperPlayerApi.Repo.Migrations.CreateObservedRosterHistory do
     # rather than duplicating.
     #
     # **Daily-always, not append-on-change.** Measured 2026-08-15 against
-    # production: 2,238 rosters across 179 leagues, 26.4 players each,
-    # `observed_rosters` totalling 1,616 kB — so ~740 bytes a row and about
-    # **605 MB a year** written unconditionally, against a 305 MB database and
-    # 14 GB free. Skipping unchanged rosters would cut that roughly fourfold
+    # production: 2,238 rosters across 179 leagues, 26.4 players each, so
+    # about **377 MB a year** written unconditionally, against a 305 MB
+    # database and 14 GB free. (Estimated at 605 MB before the fact, by
+    # extrapolating 740 bytes a row from `observed_rosters`; that table
+    # carries two indexes to this one's one, and the first day's real rows
+    # came in at 1,008 kB for 2,206 — ~468 bytes each.) Skipping unchanged
+    # rosters would cut that roughly fourfold
     # (rosters move weekly in season, barely at all outside it), and was
     # rejected anyway: it makes a missing day ambiguous between "nothing
     # changed" and "we never looked", and every query here is a point-in-time

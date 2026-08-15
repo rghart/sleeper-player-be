@@ -45,6 +45,16 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   are the same measurement as FantasyCalc's two fields. Mapping one onto the
   other would make two sources look comparable on a column where they are
   not.
+
+  KTC's liquidity is now stored — in its own `liquidity` column, which is the
+  point. It sits beside `trade_frequency` rather than inside it, so a caller
+  reading either knows which provider's measurement it has.
+
+  **Three fields beyond value, added 2026-08-15**: `liquidity`
+  (`stdLiquidity`, per-format), `injury_return` and `bye_week` (both
+  per-player, so identical on the two format rows). Injury *status* is
+  deliberately not among them — Sleeper's own dump has carried it all along.
+  See the migration for the measurements behind both decisions.
   """
 
   @behaviour SleeperPlayerApi.Intel.PlayerValueSource
@@ -193,9 +203,54 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
       roster_percent: nil,
       trade_frequency: nil,
       draft_year: player["draftYear"],
+      # Per-format: KTC prices liquidity separately for 1QB and superflex, so
+      # it belongs on this row rather than beside the per-player fields below.
+      liquidity: to_float(values["stdLiquidity"]),
+      # Per-player, so identical on both format rows. See the migration for
+      # why that duplication was preferred to a second writer into `players`.
+      injury_return: parse_return_date(player["injury"]),
+      bye_week: player["byeWeek"],
       as_of: now
     }
   end
+
+  # KTC dates its expected returns as "Aug 22, 2026". Parsed to a real date so
+  # a return already in the past reads differently from one still ahead; an
+  # unparseable value is dropped rather than guessed at, the same rule
+  # `parse_pick/1` follows.
+  #
+  # The healthy majority carry `%{"injuryCode" => 1}` and no other key —
+  # measured 2026-08-15, 425 of 500 — so a missing `injuryReturn` is the
+  # normal case, not a failure.
+  @months %{
+    "jan" => 1,
+    "feb" => 2,
+    "mar" => 3,
+    "apr" => 4,
+    "may" => 5,
+    "jun" => 6,
+    "jul" => 7,
+    "aug" => 8,
+    "sep" => 9,
+    "oct" => 10,
+    "nov" => 11,
+    "dec" => 12
+  }
+
+  @return_date ~r/^([A-Za-z]{3})[a-z]*\s+(\d{1,2}),\s*(\d{4})$/
+
+  defp parse_return_date(%{"injuryReturn" => date}) when is_binary(date) do
+    with [month, day, year] <-
+           Regex.run(@return_date, String.trim(date), capture: :all_but_first),
+         month when not is_nil(month) <- @months[String.downcase(month)],
+         {:ok, parsed} <- Date.new(String.to_integer(year), month, String.to_integer(day)) do
+      parsed
+    else
+      _ -> nil
+    end
+  end
+
+  defp parse_return_date(_), do: nil
 
   # The payload's ids arrive as integers; the crosswalk is keyed by string.
   # Normalising here rather than at every call site is what stops a

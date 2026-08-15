@@ -241,7 +241,10 @@ defmodule SleeperPlayerApi.Intel do
         :roster_percent,
         :trade_frequency,
         :as_of,
-        :draft_year
+        :draft_year,
+        :liquidity,
+        :injury_return,
+        :bye_week
       ]
     )
   end
@@ -419,6 +422,9 @@ defmodule SleeperPlayerApi.Intel do
         overall_rank: pv.overall_rank,
         position_rank: pv.position_rank,
         as_of: pv.as_of,
+        liquidity: pv.liquidity,
+        injury_return: pv.injury_return,
+        bye_week: pv.bye_week,
         previous_value: p.value,
         since: p.day
       }
