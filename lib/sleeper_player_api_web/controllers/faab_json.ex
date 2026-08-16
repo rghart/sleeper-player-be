@@ -4,8 +4,8 @@ defmodule SleeperPlayerApiWeb.FaabJSON do
   other JSON modules here.
 
   **`window` and `leagues` are not decoration.** Every bid in this corpus was
-  made in the offseason, which is a different market from the in-season one
-  where most FAAB gets spent, and a UI that renders "12% of budget" without
+  made outside the 2026 season, which is a different market from the in-season
+  one where most FAAB gets spent, and a UI that renders "12% of budget" without
   saying over what and across how many leagues is overclaiming. They ride on
   the envelope so a caller has them before it renders a single price.
   """
