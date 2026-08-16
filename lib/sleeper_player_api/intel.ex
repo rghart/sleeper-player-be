@@ -663,7 +663,8 @@ defmodule SleeperPlayerApi.Intel do
   `%{{user_id, player_id} => count}` and `leagues_seen` is
   `%{user_id => count}` — the honest denominator, being the leagues we have
   roster data for, not every league the manager is in. A league whose rosters
-  have never been fetched, or that Sleeper returned empty, is in neither.
+  have never been fetched, that Sleeper returned empty, or that the crawl has
+  stopped refreshing (see `reject_stale_rosters/1`), is in neither.
 
   `player_ids` narrows the ownership map; the denominators are always the
   manager's full count, because "owns him in 2" only means something against
@@ -671,7 +672,9 @@ defmodule SleeperPlayerApi.Intel do
   """
   @spec ownership([String.t()] | nil) :: {map, map}
   def ownership(player_ids \\ nil) do
-    base = from(r in ObservedRoster, where: not is_nil(r.owner_id))
+    base =
+      from(r in ObservedRoster, where: not is_nil(r.owner_id))
+      |> reject_stale_rosters()
 
     # A manager's denominator counts the leagues we can see, and a roster
     # with no players in it is a league we cannot see into — 22 of the 176
@@ -708,6 +711,56 @@ defmodule SleeperPlayerApi.Intel do
       |> Map.new(fn {owner_id, player_id, count} -> {{owner_id, player_id}, count} end)
 
     {ownership, leagues_seen}
+  end
+
+  # How far a roster may trail the freshest one before it stops counting. The
+  # crawl is nightly, so this is "has missed more than two consecutive runs".
+  @roster_staleness_grace_seconds 48 * 60 * 60
+
+  @doc """
+  Drops rosters the crawl has effectively abandoned: those whose `fetched_at`
+  trails the freshest observation in the table by more than
+  #{div(@roster_staleness_grace_seconds, 3600)} hours.
+
+  Rosters go stale without ever being deleted, because nothing in the crawl
+  deletes them. A league leaves `CrawlLeaguemateTransactions`' enumeration the
+  moment the last tracked leaguemate leaves it — `/user/:id/leagues` stops
+  listing it, so `crawl_league/3` is never called for it again — and its rows
+  simply stop being refreshed. Measured 2026-08-15: league 1392042205710946304
+  had 32 rows six days old and still counted, in both the numerator and the
+  `leagues_seen` denominator, as a league we could see into. The gap grows
+  without bound. The same thing happens to a league that *is* still enumerated
+  but whose `/league/:id/rosters` keeps failing, since `ensure_roster_map/2`
+  deliberately leaves the previous rows alone.
+
+  **Relative to the freshest row, not to the wall clock.** An absolute "older
+  than N days" cutoff would empty every manager's ownership at once during a
+  multi-day Sleeper outage — the read-time version of exactly what
+  `ensure_roster_map/2` refuses to do at write time, where a failed fetch must
+  read as stale rather than as "nobody owns anybody". Measuring against
+  `max(fetched_at)` makes an outage move the whole table together and exclude
+  nothing, while a league that has dropped out falls behind a corpus that is
+  still being refreshed nightly.
+
+  Applied to the query both halves are built from, so an excluded league
+  leaves the numerator and the denominator together: the answer becomes
+  "owns him in 2 of 41", never "2 of 42" with one of the 42 six days old.
+
+  A row with no `fetched_at` is kept. Nothing the crawler writes lacks one
+  (`roster_rows/3` always stamps it), so this only reaches rows written by
+  other means, and absence of a timestamp is not evidence of age — this
+  excludes only what it can positively date.
+  """
+  @spec reject_stale_rosters(Ecto.Query.t()) :: Ecto.Query.t()
+  def reject_stale_rosters(query) do
+    case Repo.one(from(r in ObservedRoster, select: max(r.fetched_at))) do
+      nil ->
+        query
+
+      latest ->
+        cutoff = DateTime.add(latest, -@roster_staleness_grace_seconds, :second)
+        from(r in query, where: is_nil(r.fetched_at) or r.fetched_at >= ^cutoff)
+    end
   end
 
   @doc """
