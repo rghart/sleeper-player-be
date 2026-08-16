@@ -24,6 +24,14 @@ defmodule SleeperPlayerApi.Intel.ObservedLeague do
     field :rosters_fetched_at, :utc_datetime
     field :transactions_fetched_through, :integer
 
+    # Sleeper's own `settings.waiver_budget` / `settings.waiver_type`, kept
+    # out of the league objects the enumeration already returns. A bid is
+    # meaningless without the budget it was made against, and a zero is
+    # meaningless without knowing whether the league bids at all — see the
+    # migration for the measured spread. `waiver_type` 2 is FAAB.
+    field :waiver_budget, :integer
+    field :waiver_type, :integer
+
     timestamps()
   end
 
@@ -36,7 +44,9 @@ defmodule SleeperPlayerApi.Intel.ObservedLeague do
       :season,
       :roster_to_user,
       :rosters_fetched_at,
-      :transactions_fetched_through
+      :transactions_fetched_through,
+      :waiver_budget,
+      :waiver_type
     ])
     |> validate_required([:id])
   end

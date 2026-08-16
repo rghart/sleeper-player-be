@@ -565,6 +565,11 @@ defmodule SleeperPlayerApi.Intel do
               roster_to_user: fragment("COALESCE(EXCLUDED.roster_to_user, ?)", l.roster_to_user),
               rosters_fetched_at:
                 fragment("COALESCE(EXCLUDED.rosters_fetched_at, ?)", l.rosters_fetched_at),
+              # COALESCE like the rest: the roster path upserts this table too
+              # and sends neither of these, so a plain replace would blank the
+              # budget on every crawl and leave every bid uncomparable again.
+              waiver_budget: fragment("COALESCE(EXCLUDED.waiver_budget, ?)", l.waiver_budget),
+              waiver_type: fragment("COALESCE(EXCLUDED.waiver_type, ?)", l.waiver_type),
               transactions_fetched_through:
                 fragment(
                   "GREATEST(COALESCE(EXCLUDED.transactions_fetched_through, 0), COALESCE(?, 0))",

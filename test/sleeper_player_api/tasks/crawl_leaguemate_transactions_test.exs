@@ -72,7 +72,20 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
     for {user, league_ids} <- leagues_for do
       Bypass.stub(bypass, "GET", "/user/#{user}/leagues/nfl/2026", fn conn ->
         :counters.add(counts, 1, 1)
-        body = Enum.map(league_ids, &%{"league_id" => &1, "name" => "League #{&1}"})
+
+        # Sleeper returns whole league objects here, `settings` included —
+        # which is where the waiver budget comes from without a second call.
+        body =
+          Enum.map(
+            league_ids,
+            &%{
+              "league_id" => &1,
+              "name" => "League #{&1}",
+              "settings" =>
+                Keyword.get(opts, :settings, %{"waiver_budget" => 100, "waiver_type" => 2})
+            }
+          )
+
         Plug.Conn.resp(conn, 200, Jason.encode!(body))
       end)
     end
@@ -285,6 +298,36 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactionsTest do
 
       assert {%{{@alice, "4034"} => 1}, _} = Intel.ownership(["4034"]),
              "a brief Sleeper failure must read as stale, not as 'nobody owns anybody'"
+    end
+  end
+
+  describe "waiver settings" do
+    test "keeps the budget and type out of the enumeration payload", %{bypass: bypass} do
+      stub(bypass, settings: %{"waiver_budget" => 1000, "waiver_type" => 2})
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      assert %{waiver_budget: 1000, waiver_type: 2} = Repo.get(ObservedLeague, 900)
+    end
+
+    # The roster path upserts this table without either field. A plain replace
+    # would blank the budget every crawl and leave every stored bid
+    # uncomparable — see `Intel.faab_market/1` for why that matters.
+    test "a later crawl that sends no settings does not blank them", %{bypass: bypass} do
+      stub(bypass, settings: %{"waiver_budget" => 200, "waiver_type" => 2})
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      Intel.upsert_observed_leagues([%{id: 900, roster_to_user: %{"1" => @alice}}])
+
+      assert %{waiver_budget: 200, waiver_type: 2} = Repo.get(ObservedLeague, 900)
+    end
+
+    test "a league with no settings stores nulls rather than guessing a budget", %{bypass: bypass} do
+      # A missing budget must read as unknown. Defaulting to 100 would price
+      # every bid in a 1000-budget league at ten times its real share.
+      stub(bypass, settings: nil)
+      assert {:ok, _} = CrawlLeaguemateTransactions.crawl(@source_league, "2026")
+
+      assert %{waiver_budget: nil, waiver_type: nil} = Repo.get(ObservedLeague, 900)
     end
   end
 

@@ -175,7 +175,7 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
             Enum.reduce(leagues, acc, fn league, inner ->
               case to_int(league["league_id"]) do
                 nil -> inner
-                id -> Map.put_new(inner, id, league["name"])
+                id -> Map.put_new(inner, id, league_row(league))
               end
             end)
 
@@ -194,8 +194,22 @@ defmodule SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions do
 
   defp store_leagues(leagues, season) do
     leagues
-    |> Enum.map(fn {id, name} -> %{id: id, name: name, season: season} end)
+    |> Enum.map(fn {id, row} -> Map.merge(row, %{id: id, season: season}) end)
     |> Intel.upsert_observed_leagues()
+  end
+
+  # The waiver settings ride along in the enumeration payload, which already
+  # returns whole league objects — no extra request. Both are needed before a
+  # bid can be compared to any other bid: see the migration for the measured
+  # budget spread, and `Intel.faab_market/1` for what it does with them.
+  defp league_row(league) do
+    settings = league["settings"] || %{}
+
+    %{
+      name: league["name"],
+      waiver_budget: to_int(settings["waiver_budget"]),
+      waiver_type: to_int(settings["waiver_type"])
+    }
   end
 
   defp crawl_league(league_id, current_week, summary) do
