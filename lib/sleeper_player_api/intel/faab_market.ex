@@ -45,11 +45,22 @@ defmodule SleeperPlayerApi.Intel.FaabMarket do
 
   ## The window is not optional
 
-  Every bid in the corpus today falls between 2026-05-01 and 2026-07-31 —
-  offseason FAAB, which is a different market from the in-season one where
-  most FAAB is actually spent. The window travels with the response for the
-  same reason `coverage` travels with manager activity: a caller that renders
-  "what he costs" over a window like that, without saying so, is overclaiming.
+  The corpus runs from 2025-12-31 to the present, and it is **all offseason**
+  with respect to the 2026 season, which has not started. Measured 2026-08-15,
+  winning claims by month: Dec 2, Jan 167, Feb 26, Mar 150, Apr 227, May 1327,
+  Jun 602, Jul 379, Aug 524. May dominates because that is when rookie drafts
+  land and the run on undrafted rookies follows them.
+
+  Offseason FAAB is a different market from the in-season one where most FAAB
+  actually gets spent — these are prices for speculative adds, not for the
+  week-9 running back everyone suddenly needs. The window travels with the
+  response for the same reason `coverage` travels with manager activity: a
+  caller that renders "what he costs" over a window like that, without saying
+  so, is overclaiming.
+
+  (An earlier version of this doc gave the span as 2026-05-01 to 2026-07-31.
+  That was the *positive-bid* subset. A zero bid is a real winning claim and
+  the full range is wider.)
   """
 
   import Ecto.Query
