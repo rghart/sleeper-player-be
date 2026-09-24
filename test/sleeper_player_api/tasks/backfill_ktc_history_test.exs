@@ -55,7 +55,21 @@ defmodule SleeperPlayerApi.Tasks.BackfillKtcHistoryTest do
     }
   end
 
+  # A player page as KTC has served it since 2026-09-08: each variant in its
+  # own JSON block.
   defp player_page(one_qb, superflex) do
+    """
+    <script type="application/json" id="pd-oneqb">#{Jason.encode!(one_qb)}</script>
+    <script type="application/json" id="pd-superflex">#{Jason.encode!(superflex)}</script>
+    <script>
+    var playerSuperflex = JSON.parse(document.getElementById('pd-superflex').textContent);
+    var playerOneQB = JSON.parse(document.getElementById('pd-oneqb').textContent);
+    </script>
+    """
+  end
+
+  # The shape before 2026-09-08, still read as a fallback.
+  defp legacy_player_page(one_qb, superflex) do
     """
     <script>
     var playerOneQB = #{Jason.encode!(one_qb)};
@@ -92,6 +106,18 @@ defmodule SleeperPlayerApi.Tasks.BackfillKtcHistoryTest do
              %{day: ~D[2026-08-10], value: 5942.0, overall_rank: 44},
              %{day: ~D[2026-08-11], value: 5984.0, overall_rank: 43}
            ] = gibbs
+  end
+
+  test "still reads a player page in the older inline shape", %{bypass: bypass} do
+    for slug <- ["jahmyr-gibbs-1415", "zay-flowers-1443"] do
+      Bypass.stub(bypass, "GET", "/dynasty-rankings/players/#{slug}", fn conn ->
+        one = variant([{"260810", 5942}], [{"260810", 44}], [])
+        Plug.Conn.resp(conn, 200, legacy_player_page(one, one))
+      end)
+    end
+
+    assert {:ok, %{players: 2, failed: 0}} = BackfillKtcHistory.backfill(delay_ms: 0)
+    assert length(Repo.all(PlayerValueHistory)) == 4
   end
 
   test "`since` drops earlier days but still stores later ones", %{bypass: bypass} do

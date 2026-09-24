@@ -108,7 +108,21 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
     {:ok, bypass: bypass}
   end
 
+  # The shape KTC has served since 2026-09-08: the data in a JSON script
+  # block, read back by an inline script that no longer contains it.
   defp page(players) do
+    """
+    <html><body>
+    <script type="application/json" id="ktc-players">#{Jason.encode!(players)}</script>
+    <script>
+    var somethingElse = [1,2,3];
+    var playersArray = JSON.parse(document.getElementById('ktc-players').textContent);
+    </script></body></html>
+    """
+  end
+
+  # The shape before 2026-09-08, still read as a fallback.
+  defp legacy_page(players) do
     """
     <html><body><script>
     var somethingElse = [1,2,3];
@@ -260,6 +274,33 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
     stub(bypass, [%{"playerName" => "Nobody", "mflid" => 999_999, "oneQBValues" => %{}}])
 
     assert {:error, :no_joinable_players} = KeepTradeCut.fetch_values()
+  end
+
+  test "still reads the older inline playersArray", %{bypass: bypass} do
+    Bypass.stub(bypass, "GET", "/dynasty-rankings", fn conn ->
+      Plug.Conn.resp(conn, 200, legacy_page(@players))
+    end)
+
+    Bypass.stub(bypass, "GET", "/crosswalk.csv", fn conn ->
+      Plug.Conn.resp(conn, 200, @crosswalk)
+    end)
+
+    assert {:ok, [_ | _]} = KeepTradeCut.fetch_values()
+  end
+
+  test "a page that only references the JSON block, without it, is not found", %{bypass: bypass} do
+    # What a half-rendered or trimmed page would look like: the script that
+    # reads the block is there, the block is not. The inline-literal fallback
+    # must not mistake the JSON.parse call for data.
+    Bypass.expect_once(bypass, "GET", "/dynasty-rankings", fn conn ->
+      Plug.Conn.resp(
+        conn,
+        200,
+        "<script>var playersArray = JSON.parse(document.getElementById('ktc-players').textContent);</script>"
+      )
+    end)
+
+    assert {:error, :players_array_not_found} = KeepTradeCut.fetch_values()
   end
 
   test "a page with no playersArray is an error rather than an empty list", %{bypass: bypass} do
