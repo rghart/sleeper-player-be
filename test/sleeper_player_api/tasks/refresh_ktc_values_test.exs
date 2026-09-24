@@ -59,7 +59,8 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
       Plug.Conn.resp(
         conn,
         200,
-        "<script>var playersArray = #{Jason.encode!(players)};\n</script>"
+        "<script type=\"application/json\" id=\"ktc-players\">#{Jason.encode!(players)}</script>" <>
+          "<script>var playersArray = JSON.parse(document.getElementById('ktc-players').textContent);</script>"
       )
     end)
   end
@@ -70,7 +71,8 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
       Plug.Conn.resp(
         conn,
         200,
-        "<script>var playersArray = #{Jason.encode!(@players)};\n</script>"
+        "<script type=\"application/json\" id=\"ktc-players\">#{Jason.encode!(@players)}</script>" <>
+          "<script>var playersArray = JSON.parse(document.getElementById('ktc-players').textContent);</script>"
       )
     end)
 

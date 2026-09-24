@@ -26,6 +26,21 @@ defmodule SleeperPlayerApi.Client.KeepTradeCut do
 
   @keep_trade_cut_url "https://keeptradecut.com"
 
+  # Where each variable's data lives. Since 2026-09-08 KTC no longer writes
+  # the JSON into the script itself: the page carries it in a
+  # `<script type="application/json" id="...">` block and the script reads it
+  # back with `JSON.parse(document.getElementById(id).textContent)`. The
+  # hourly refresh failed with `:players_array_not_found` for 16 days before
+  # anyone noticed, because nothing but a log line said so.
+  @json_blocks %{
+    "playersArray" => "ktc-players",
+    "playerOneQB" => "pd-oneqb",
+    "playerSuperflex" => "pd-superflex"
+  }
+
+  # The pre-2026-09-08 shape, kept as a fallback: a site that has changed its
+  # markup once may well change it back, and reading both costs nothing.
+  #
   # `.*?` is non-greedy and `s` makes `.` match newlines: the literal is one
   # ~1.2MB line in practice, but anchoring on the first `];` rather than the
   # last is what keeps this from swallowing the rest of the document if the
@@ -48,8 +63,9 @@ defmodule SleeperPlayerApi.Client.KeepTradeCut do
     * `{:ok, players}` — a list of player maps, each carrying `oneQBValues`
       and `superflexValues`
     * `{:error, {:http_error, status}}` on any non-2xx
-    * `{:error, :players_array_not_found}` when the page no longer embeds the
-      array (a site redesign, or an error page served with a 200)
+    * `{:error, :players_array_not_found}` when the page carries neither the
+      `ktc-players` JSON block nor the older inline `var playersArray` (a site
+      redesign, or an error page served with a 200)
     * `{:error, {:invalid_json, :players_array}}` when it is there but does
       not decode
     * `{:error, {:transport_error, reason}}` on a connection failure
@@ -117,17 +133,28 @@ defmodule SleeperPlayerApi.Client.KeepTradeCut do
   # machine-emitted one-per-line literals, and a balanced-brace scan over a
   # 3.5MB page to gain nothing measurable is not worth the code.
   defp extract_object(body, var) do
-    with [json] <-
-           Regex.run(~r/var #{var}\s*=\s*(\{.*?\});\s*$/ms, body, capture: :all_but_first),
-         {:ok, object} <- Jason.decode(json) do
+    with [json] <- json_block(body, var) || legacy_object(body, var),
+         {:ok, object} when is_map(object) <- Jason.decode(json) do
       {:ok, object}
     else
       _ -> :error
     end
   end
 
+  defp legacy_object(body, var),
+    do: Regex.run(~r/var #{var}\s*=\s*(\{.*?\});\s*$/ms, body, capture: :all_but_first)
+
+  # The JSON inside `<script type="application/json" id="...">` for a
+  # variable, or nil when the page has no such block. Matched on the id alone
+  # so attribute order and extra attributes do not matter.
+  defp json_block(body, var) do
+    id = Map.fetch!(@json_blocks, var)
+    Regex.run(~r/<script\b[^>]*\bid="#{id}"[^>]*>(.*?)<\/script>/s, body, capture: :all_but_first)
+  end
+
   defp extract_players(body) do
-    case Regex.run(@players_array, body, capture: :all_but_first) do
+    case json_block(body, "playersArray") ||
+           Regex.run(@players_array, body, capture: :all_but_first) do
       [json] ->
         case Jason.decode(json) do
           {:ok, players} when is_list(players) -> {:ok, players}
