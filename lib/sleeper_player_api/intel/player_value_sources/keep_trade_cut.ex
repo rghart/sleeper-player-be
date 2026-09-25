@@ -117,10 +117,19 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   is not a player and `player_values.player_id` is a Sleeper player id. The
   caller fetches once and writes both; see `Tasks.RefreshKtcValues`.
 
-  Both variants per pick, same as players. Anything whose name does not parse
-  as `"<season> <tier> <round>"` is dropped rather than guessed at — KTC's 36
-  entries are exactly regular today, and an unparseable one means the naming
-  changed, which should show up as missing rather than as a wrong price.
+  Both variants per pick, same as players. Two namings are read:
+
+    * `"2027 Early 1st"` - a pick whose slot is not known yet, stored with
+      tier `"early"` / `"mid"` / `"late"`.
+    * `"2027 Pick 1.04"` - an exact slot, which KTC lists once a season is
+      over and draft orders are set. Stored with tier `"slot-4"`: the pick
+      number within the round, in the same column, so exact slots need no
+      migration and a caller that knows its slot asks for it the same way.
+
+  Anything else is dropped rather than guessed at - an unparseable pick means
+  the naming changed, which should show up as missing rather than as a wrong
+  price. `unrecognized_picks/1` names what was dropped so the refresh can
+  say so out loud.
   """
   @spec pick_entries([map], DateTime.t()) :: [map]
   def pick_entries(players, now) do
@@ -159,12 +168,40 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   # lose a real price.
   @pick_name ~r/^(\d{4})\s+(Early|Mid|Late)\s+(\d+)(?:st|nd|rd|th)$/i
 
+  # "2027 Pick 1.04" -> {2027, "slot-4", 1}. Deliberately read from the name
+  # and not from the payload's `pickRound` / `pickNum`: those are 0 on every
+  # tiered pick today, and nothing observed yet says whether `pickNum` counts
+  # within the round or across the draft. A guess there would be a wrong price
+  # that looks right; an unmatched name is a push notification instead.
+  @slot_name ~r/^(\d{4})\s+Pick\s+(\d+)\.(\d+)$/i
+
+  @doc """
+  KTC entries marked as rookie picks (`position: "RDP"`) that neither pick
+  naming matches - the values `pick_entries/2` is dropping. Each comes back
+  with the fields a fix would need.
+  """
+  @spec unrecognized_picks([map]) :: [map]
+  def unrecognized_picks(players) do
+    players
+    |> Enum.filter(&(&1["position"] == "RDP" and parse_pick(&1["playerName"]) == :error))
+    |> Enum.map(&Map.take(&1, ["playerName", "pickRound", "pickNum", "draftYear"]))
+  end
+
   defp parse_pick(name) when is_binary(name) do
-    case Regex.run(@pick_name, String.trim(name), capture: :all_but_first) do
-      [season, tier, round] ->
+    name = String.trim(name)
+
+    cond do
+      match = Regex.run(@pick_name, name, capture: :all_but_first) ->
+        [season, tier, round] = match
         {:ok, {String.to_integer(season), String.downcase(tier), String.to_integer(round)}}
 
-      nil ->
+      match = Regex.run(@slot_name, name, capture: :all_but_first) ->
+        [season, round, slot] = match
+
+        {:ok,
+         {String.to_integer(season), "slot-#{String.to_integer(slot)}", String.to_integer(round)}}
+
+      true ->
         :error
     end
   end

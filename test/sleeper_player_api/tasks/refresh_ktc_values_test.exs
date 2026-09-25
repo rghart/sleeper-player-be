@@ -128,6 +128,86 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
     assert [%{season: 2027, round: 1, tier: "early"}] = entries
   end
 
+  test "an exact-slot pick is stored as its slot within the round" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    entries =
+      KeepTradeCut.pick_entries(
+        [%{"playerName" => "2027 Pick 2.11", "oneQBValues" => %{"value" => 1800}}],
+        now
+      )
+
+    assert [%{season: 2027, round: 2, tier: "slot-11", value: 1800.0}] = entries
+  end
+
+  test "unrecognized_picks/1 names only rookie picks neither naming reads" do
+    players = [
+      %{"playerName" => "2027 Early 1st", "position" => "RDP"},
+      %{"playerName" => "2027 Pick 1.04", "position" => "RDP"},
+      %{"playerName" => "2027 1.04", "position" => "RDP", "pickRound" => 1, "pickNum" => 4},
+      %{"playerName" => "Jahmyr Gibbs", "position" => "RB"}
+    ]
+
+    assert [%{"playerName" => "2027 1.04", "pickRound" => 1, "pickNum" => 4}] =
+             KeepTradeCut.unrecognized_picks(players)
+  end
+
+  describe "picks the app cannot read" do
+    setup %{bypass: bypass} do
+      Application.put_env(
+        :sleeper_player_api,
+        :alert_push_url,
+        "http://localhost:#{bypass.port}/alerts"
+      )
+
+      RefreshKtcValues.reset_alerts()
+      test_pid = self()
+
+      Bypass.stub(bypass, "POST", "/alerts", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:pushed, conn |> Plug.Conn.get_req_header("title") |> hd(), body})
+        Plug.Conn.resp(conn, 200, "{}")
+      end)
+
+      on_exit(fn ->
+        Application.delete_env(:sleeper_player_api, :alert_push_url)
+        RefreshKtcValues.reset_alerts()
+      end)
+
+      :ok
+    end
+
+    test "push an alert naming them, once a day, and still write everything else", %{
+      bypass: bypass
+    } do
+      odd = %{
+        "playerName" => "2027 1.04",
+        "position" => "RDP",
+        "mflid" => 0,
+        "pickRound" => 1,
+        "pickNum" => 4,
+        "oneQBValues" => %{"value" => 6100},
+        "superflexValues" => %{"value" => 6000}
+      }
+
+      stub_rankings(bypass, @players ++ [odd])
+
+      assert {:ok, %{values: 2}} = RefreshKtcValues.refresh()
+      assert_received {:pushed, "KTC lists 1 picks the app can't read", body}
+      assert body =~ ~s["2027 1.04" (pickRound 1, pickNum 4)]
+
+      assert {:ok, _} = RefreshKtcValues.refresh()
+      refute_received {:pushed, _, _}
+    end
+
+    test "send nothing when every pick is read", %{bypass: bypass} do
+      stub_rankings(bypass, @players)
+
+      assert {:ok, _} = RefreshKtcValues.refresh()
+      refute_received {:pushed, _, _}
+    end
+  end
+
   test "all three tiers are kept for a season and round, since Sleeper picks carry none" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
