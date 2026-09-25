@@ -10,6 +10,10 @@ defmodule SleeperPlayerApi.Intel.DraftPickValue do
   `(season, round)` because a Sleeper traded pick does not know which it will
   become — see the migration for why that choice belongs to the caller rather
   than to storage.
+
+  Or `"slot-N"`, an exact pick (`"slot-4"` is the 4th pick of its round),
+  which KTC lists once a season is over and draft orders are known. Kept in
+  the same column so exact slots needed no migration.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -47,7 +51,7 @@ defmodule SleeperPlayerApi.Intel.DraftPickValue do
       :as_of
     ])
     |> validate_required([:season, :round, :tier, :source])
-    |> validate_inclusion(:tier, @tiers)
+    |> validate_format(:tier, ~r/^(early|mid|late|slot-\d+)$/)
     |> unique_constraint([:season, :round, :tier, :source])
   end
 end
