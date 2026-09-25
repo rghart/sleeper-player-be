@@ -147,6 +147,81 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
     assert values == [7357.0, 1764.0]
   end
 
+  describe "a pick the latest fetch no longer lists" do
+    # KTC stops pricing a season once its rookie drafts have run. Before this,
+    # the upsert-only write kept serving those 2026 picks at their last price
+    # for as long as the table existed.
+    @later [
+      Enum.at(@players, 0),
+      Enum.at(@players, 1),
+      %{
+        "playerName" => "2029 Mid 1st",
+        "mflid" => 0,
+        "oneQBValues" => %{"value" => 5100, "rank" => 30, "positionalRank" => 3},
+        "superflexValues" => %{"value" => 4900, "rank" => 32, "positionalRank" => 3}
+      }
+    ]
+
+    defp seasons(source) do
+      source |> Intel.draft_pick_values() |> Enum.map(& &1.season) |> Enum.sort()
+    end
+
+    test "is removed by the next refresh", %{bypass: bypass} do
+      stub_rankings(bypass, @players)
+      assert {:ok, _} = RefreshKtcValues.refresh()
+      assert seasons("keeptradecut:sf") == [2026, 2027]
+
+      stub_rankings(bypass, @later)
+      assert {:ok, %{picks: 4, pruned_picks: 2}} = RefreshKtcValues.refresh()
+
+      assert seasons("keeptradecut:1qb") == [2027, 2029]
+      assert seasons("keeptradecut:sf") == [2027, 2029]
+      assert length(Repo.all(DraftPickValue)) == 4
+    end
+
+    test "is only pruned from the sources this fetch priced", %{bypass: bypass} do
+      Intel.upsert_draft_pick_values([
+        %{
+          season: 2026,
+          round: 1,
+          tier: "mid",
+          source: "othersource",
+          value: 5000.0,
+          overall_rank: nil,
+          position_rank: nil,
+          as_of: DateTime.utc_now() |> DateTime.truncate(:second)
+        }
+      ])
+
+      stub_rankings(bypass, @later)
+      assert {:ok, _} = RefreshKtcValues.refresh()
+      assert seasons("othersource") == [2026]
+    end
+
+    test "survives a refresh that fails", %{bypass: bypass} do
+      stub_rankings(bypass, @players)
+      assert {:ok, _} = RefreshKtcValues.refresh()
+
+      Bypass.stub(bypass, "GET", "/dynasty-rankings", fn conn ->
+        Plug.Conn.resp(conn, 503, "boom")
+      end)
+
+      assert {:error, _} = RefreshKtcValues.refresh()
+      assert seasons("keeptradecut:sf") == [2026, 2027]
+    end
+
+    test "survives a fetch that carries players but no picks at all", %{bypass: bypass} do
+      # Every pick vanishing at once is what a renamed pick label looks like,
+      # not KTC deciding to stop pricing picks; the last prices are kept.
+      stub_rankings(bypass, @players)
+      assert {:ok, _} = RefreshKtcValues.refresh()
+
+      stub_rankings(bypass, [Enum.at(@players, 0)])
+      assert {:ok, %{picks: 0, pruned_picks: 0}} = RefreshKtcValues.refresh()
+      assert seasons("keeptradecut:sf") == [2026, 2027]
+    end
+  end
+
   test "a failed fetch writes nothing at all", %{bypass: bypass} do
     Bypass.expect_once(bypass, "GET", "/dynasty-rankings", fn conn ->
       Plug.Conn.resp(conn, 503, "boom")

@@ -348,6 +348,53 @@ defmodule SleeperPlayerApi.Intel do
   end
 
   @doc """
+  Deletes the pick values in `values`' sources that `values` itself does not
+  carry, so the table holds exactly the latest fetch.
+
+  `upsert_draft_pick_values/1` alone never deletes, and KTC stops listing a
+  season once its rookie drafts have run — so a 2026 1st went on being served
+  at its last pre-draft price.
+
+  Matched on the pick's own key, not on `as_of`: two refreshes inside one
+  second stamp the same `as_of`, and "older than this fetch" would then keep
+  every stale row.
+
+  Scoped to the sources present in `values`: a source the fetch did not cover
+  is not this fetch's to prune. An empty batch therefore prunes nothing, and that is
+  deliberate, for the same reason `{:error, :no_joinable_players}` exists — every pick vanishing at
+  once is what a renamed label looks like, and keeping the last prices is the
+  lesser harm. Call it after the upsert, in the same transaction.
+  """
+  @spec prune_draft_pick_values([map]) :: {non_neg_integer, nil}
+  def prune_draft_pick_values(values) do
+    values
+    |> Enum.group_by(& &1.source)
+    |> Enum.reduce({0, nil}, fn {source, picks}, {count, _} ->
+      seasons = Enum.map(picks, & &1.season)
+      rounds = Enum.map(picks, & &1.round)
+      tiers = Enum.map(picks, & &1.tier)
+
+      {n, _} =
+        from(pv in DraftPickValue,
+          where:
+            pv.source == ^source and
+              fragment(
+                "(?, ?, ?) NOT IN (SELECT * FROM unnest(?::integer[], ?::integer[], ?::text[]))",
+                pv.season,
+                pv.round,
+                pv.tier,
+                ^seasons,
+                ^rounds,
+                ^tiers
+              )
+        )
+        |> Repo.delete_all()
+
+      {count + n, nil}
+    end)
+  end
+
+  @doc """
   Current values for `source`, each with how far it has moved over
   `window_days` — the in-season dynasty read the history table was built for.
 
