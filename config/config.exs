@@ -125,16 +125,6 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
       overlap: false
     ],
 
-    # Hourly at :45 — alert if a value source has stopped refreshing. At :45
-    # so it lands between KTC's :15 runs rather than racing one; see the
-    # module for thresholds and why it exists.
-    [
-      name: :check_value_freshness,
-      schedule: "45 * * * *",
-      task: {SleeperPlayerApi.Tasks.CheckValueFreshness, :check, []},
-      overlap: false
-    ],
-
     # 4:00am Central — sweep leaguemate drafts. Completed drafts are
     # immutable and never refetched, so a warm run is cheap.
     [

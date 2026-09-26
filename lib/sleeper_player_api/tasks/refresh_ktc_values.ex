@@ -15,11 +15,11 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValues do
 
   require Logger
 
-  alias SleeperPlayerApi.Alerts
   alias SleeperPlayerApi.Client.KeepTradeCut, as: Client
   alias SleeperPlayerApi.Intel
   alias SleeperPlayerApi.Intel.PlayerIdCrosswalk
   alias SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut
+  alias SleeperPlayerApi.Intel.ValueStatus
   alias SleeperPlayerApi.Repo
 
   @doc """
@@ -47,7 +47,7 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValues do
 
       if picks == [], do: Logger.warning("RefreshKtcValues: no picks parsed; kept the last ones")
 
-      alert_unrecognized_picks(KeepTradeCut.unrecognized_picks(players), now)
+      record_unrecognized(KeepTradeCut.unrecognized_picks(players))
 
       {:ok, counts}
     else
@@ -68,37 +68,14 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValues do
 
   # KTC listing a pick this app cannot read means its value is silently
   # dropped - exactly how the exact-slot picks KTC adds after each season
-  # would first arrive if their naming is not the one guessed at. Pushed at
-  # most once a day, with the fields a fix needs, rather than left in a log.
-  @unrecognized_key {__MODULE__, :unrecognized_picks_alerted_at}
+  # would first arrive if their naming is not the one guessed at. Recorded for
+  # `/api/v1/status`, where the app shows it as a banner, rather than left in
+  # a log nobody reads.
+  defp record_unrecognized(unrecognized) do
+    ValueStatus.record_unrecognized_picks(unrecognized)
 
-  defp alert_unrecognized_picks([], _now), do: :ok
-
-  defp alert_unrecognized_picks(unrecognized, now) do
-    last = :persistent_term.get(@unrecognized_key, nil)
-
-    if last == nil or DateTime.diff(now, last, :hour) >= 24 do
-      examples =
-        unrecognized
-        |> Enum.take(3)
-        |> Enum.map_join("; ", fn pick ->
-          "#{inspect(pick["playerName"])} (pickRound #{pick["pickRound"]}, pickNum #{pick["pickNum"]})"
-        end)
-
-      Alerts.push(
-        "KTC lists #{length(unrecognized)} picks the app can't read",
-        "Their values are being dropped. Examples: #{examples}. " <>
-          "Update the pick naming in KeepTradeCut.pick_entries.",
-        priority: "high",
-        tags: ["warning"]
-      )
-
-      :persistent_term.put(@unrecognized_key, now)
+    if unrecognized != [] do
+      Logger.warning("RefreshKtcValues: #{length(unrecognized)} unrecognized picks dropped")
     end
-
-    Logger.warning("RefreshKtcValues: #{length(unrecognized)} unrecognized picks dropped")
   end
-
-  @doc false
-  def reset_alerts, do: :persistent_term.erase(@unrecognized_key)
 end

@@ -7,6 +7,7 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
   alias SleeperPlayerApi.Intel.PlayerValue
   alias SleeperPlayerApi.Intel.PlayerValueHistory
   alias SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut
+  alias SleeperPlayerApi.Intel.ValueStatus
   alias SleeperPlayerApi.Tasks.RefreshKtcValues
 
   @crosswalk "mfl_id,sleeper_id,name\n16162,9509,Jahmyr Gibbs\n"
@@ -153,31 +154,12 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
   end
 
   describe "picks the app cannot read" do
-    setup %{bypass: bypass} do
-      Application.put_env(
-        :sleeper_player_api,
-        :alert_push_url,
-        "http://localhost:#{bypass.port}/alerts"
-      )
-
-      RefreshKtcValues.reset_alerts()
-      test_pid = self()
-
-      Bypass.stub(bypass, "POST", "/alerts", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:pushed, conn |> Plug.Conn.get_req_header("title") |> hd(), body})
-        Plug.Conn.resp(conn, 200, "{}")
-      end)
-
-      on_exit(fn ->
-        Application.delete_env(:sleeper_player_api, :alert_push_url)
-        RefreshKtcValues.reset_alerts()
-      end)
-
-      :ok
+    setup do
+      ValueStatus.reset()
+      on_exit(&ValueStatus.reset/0)
     end
 
-    test "push an alert naming them, once a day, and still write everything else", %{
+    test "are recorded for the status endpoint, and everything else still writes", %{
       bypass: bypass
     } do
       odd = %{
@@ -193,18 +175,15 @@ defmodule SleeperPlayerApi.Tasks.RefreshKtcValuesTest do
       stub_rankings(bypass, @players ++ [odd])
 
       assert {:ok, %{values: 2}} = RefreshKtcValues.refresh()
-      assert_received {:pushed, "KTC lists 1 picks the app can't read", body}
-      assert body =~ ~s["2027 1.04" (pickRound 1, pickNum 4)]
-
-      assert {:ok, _} = RefreshKtcValues.refresh()
-      refute_received {:pushed, _, _}
+      assert %{count: 1, examples: ["2027 1.04"]} = ValueStatus.status().unrecognized_picks
     end
 
-    test "send nothing when every pick is read", %{bypass: bypass} do
+    test "a clean refresh clears what an earlier one recorded", %{bypass: bypass} do
+      ValueStatus.record_unrecognized_picks([%{"playerName" => "2027 1.04"}])
       stub_rankings(bypass, @players)
 
       assert {:ok, _} = RefreshKtcValues.refresh()
-      refute_received {:pushed, _, _}
+      assert %{count: 0, examples: []} = ValueStatus.status().unrecognized_picks
     end
   end
 
