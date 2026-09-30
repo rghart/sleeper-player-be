@@ -94,6 +94,54 @@ defmodule SleeperPlayerApi.Intel.MarketSettings do
   end
 
   @doc """
+  The settings a Sleeper league object implies, falling back to the stored
+  slice field by field, exactly as `parse/1` does for request params. Mirrors
+  the frontend's `leagueMarketSettings`, so a league priced server-side asks
+  the same question the app asks.
+
+  - `dynasty`: Sleeper's `settings.type` is 0 redraft, 1 keeper, 2 dynasty
+    (3 is guillotine). Keeper is closer to redraft for pricing, so only 2
+    counts.
+  - `num_qbs`: how many quarterbacks a lineup can hold, which is the sum of
+    `QB` slots and a superflex, not either one. Two QB slots plus a superflex
+    can start three. Bounded by `@max_qbs` like a request would be.
+  - `num_teams`: `total_rosters`.
+  - `ppr`: `scoring_settings.rec`. `0` is standard scoring, not an absence.
+  """
+  @spec from_league(map) :: t
+  def from_league(league) when is_map(league) do
+    positions = league["roster_positions"]
+
+    num_qbs =
+      if is_list(positions) do
+        qbs = Enum.count(positions, &(&1 == "QB"))
+        superflex = if "SUPER_FLEX" in positions, do: 1, else: 0
+        (qbs + superflex) |> max(1) |> min(@max_qbs)
+      end
+
+    type = get_in(league, ["settings", "type"])
+    ppr = get_in(league, ["scoring_settings", "rec"])
+    teams = league["total_rosters"]
+
+    %{
+      dynasty: if(type == nil, do: @default.dynasty, else: type == 2),
+      num_qbs: num_qbs || @default.num_qbs,
+      num_teams: if(is_integer(teams) and teams > 0, do: teams, else: @default.num_teams),
+      ppr: if(is_number(ppr), do: ppr * 1.0, else: @default.ppr)
+    }
+  end
+
+  @doc """
+  Whether values for these settings should come from the superflex lists
+  rather than the 1QB ones. KeepTradeCut publishes exactly those two, so the
+  continuous quarterback count collapses to a boolean, split at 2: any league
+  that can start a second quarterback prices like superflex, including a true
+  two-QB league with no superflex slot at all.
+  """
+  @spec superflex?(t) :: boolean
+  def superflex?(settings), do: settings.num_qbs >= 2
+
+  @doc """
   These settings as FantasyCalc's query string.
 
   Clamped to what the provider actually prices - see `effective/1`. This

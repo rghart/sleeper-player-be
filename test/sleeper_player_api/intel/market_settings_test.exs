@@ -144,4 +144,42 @@ defmodule SleeperPlayerApi.Intel.MarketSettingsTest do
              |> Map.get("ppr") == "0.5"
     end
   end
+
+  describe "from_league/1" do
+    test "counts every quarterback a lineup can hold, QB slots plus a superflex" do
+      # 4 QB Madness's shape: three QB slots and a superflex. Stopping at the
+      # superflex would report two.
+      league = %{"roster_positions" => ["QB", "QB", "QB", "SUPER_FLEX", "RB", "BN"]}
+
+      assert MarketSettings.from_league(league).num_qbs == 4
+    end
+
+    test "reads a true two-QB league as superflex for pricing, with no superflex slot" do
+      settings = MarketSettings.from_league(%{"roster_positions" => ["QB", "QB", "RB", "WR"]})
+
+      assert settings.num_qbs == 2
+      assert MarketSettings.superflex?(settings)
+    end
+
+    test "a one-QB league is not superflex" do
+      settings = MarketSettings.from_league(%{"roster_positions" => ["QB", "RB", "FLEX", "BN"]})
+
+      refute MarketSettings.superflex?(settings)
+    end
+
+    test "only Sleeper type 2 is dynasty; keeper and redraft are not" do
+      for {type, dynasty} <- [{0, false}, {1, false}, {2, true}, {3, false}] do
+        assert MarketSettings.from_league(%{"settings" => %{"type" => type}}).dynasty == dynasty
+      end
+    end
+
+    test "standard scoring is a real answer, not an absence" do
+      assert MarketSettings.from_league(%{"scoring_settings" => %{"rec" => 0}}).ppr == 0.0
+    end
+
+    test "falls back to the stored slice field by field" do
+      assert MarketSettings.from_league(%{"total_rosters" => 10}) ==
+               %{MarketSettings.default() | num_teams: 10}
+    end
+  end
 end

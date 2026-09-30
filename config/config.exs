@@ -78,6 +78,22 @@ config :sleeper_player_api, :intel_leagues, [1_313_425_233_297_813_504]
 # without a deploy. Set it to pin a specific season.
 # config :sleeper_player_api, :intel_season, "2026"
 
+# Power rankings (docs/dynasty-engine.md, M1). Tier lines are z-scores
+# against the league average; `adp_ceiling` is the ADP depth that still
+# counts. These are the values the frontend shipped with, and the parity
+# fixtures in test/support/fixtures/power_rankings were captured under them:
+# change one here and those tests will fail until the fixtures are
+# recaptured against a frontend using the same number.
+config :sleeper_player_api, SleeperPlayerApi.Intel.PowerRankings,
+  thresholds: %{
+    strong_now: 0.5,
+    weak_now: -0.5,
+    all_in_future: -0.5,
+    rebuilding_future: 0,
+    rebuilding_picks: 0
+  },
+  adp_ceiling: 300
+
 # Quantum cron jobs. Times are UTC; Central is UTC-5.
 #
 # Ordering matters: the player dump runs first because the intel crawler

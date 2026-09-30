@@ -77,17 +77,22 @@ defmodule SleeperPlayerApi.Intel.PickHoldings do
 
   defp key(traded), do: {to_season(traded["season"]), traded["round"], traded["roster_id"]}
 
-  # Sleeper sends a season as a string on some payloads and an integer on
-  # others; a map keyed by one and read with the other silently matches
-  # nothing, which here would read as "no picks were ever traded".
-  defp to_season(season) when is_integer(season), do: season
+  @doc """
+  A season as an integer, whichever form Sleeper sent it in; nil if unreadable.
 
-  defp to_season(season) when is_binary(season) do
+  Sleeper sends a season as a string on some payloads and an integer on
+  others; a map keyed by one and read with the other silently matches
+  nothing, which here would read as "no picks were ever traded".
+  """
+  @spec to_season(term) :: integer | nil
+  def to_season(season) when is_integer(season), do: season
+
+  def to_season(season) when is_binary(season) do
     case Integer.parse(season) do
       {year, _} -> year
       :error -> nil
     end
   end
 
-  defp to_season(_), do: nil
+  def to_season(_), do: nil
 end
