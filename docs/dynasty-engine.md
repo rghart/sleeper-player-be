@@ -278,9 +278,14 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
 - **Two quality fixes from that data** (rghart/sleeper-player-be#69):
   1. Sleeper's rookie flag also covers some veteran supplemental drafts.
      One took Pat Freiermuth and a 14-year kicker ahead of the top rookie
-     and moved every top rookie's mean pick. A rookie draft now needs ≥ 50%
+     and moved every top rookie's mean pick. A rookie draft now needs ≥ 75%
      of its picks to be that season's rookies (config). The rest are
-     excluded at ADP time and counted in `excludedDrafts`.
+     excluded at ADP time and counted in `excludedDrafts`. The line was
+     50% in #69 and let both veteran drafts through, because each was
+     exactly half rookies. Measured across 269 rookie drafts, 266 were 90%+
+     rookies and 1 was 80–90%, so it moved to 75% (#70). Live after #70:
+     rookie-sf-no_tep excludes 1 draft, the top rookies' spread fell from
+     ~6.4 to 0.2–1.1, and ρ rose from 0.928 to 0.942.
   2. The startup comparison's biggest "disagreements" were all kickers
      (Dicker ~94 here vs 282 on Sleeper): leagues that start a K draft one.
      K and DEF keep their ADP but are left out of the comparison.
