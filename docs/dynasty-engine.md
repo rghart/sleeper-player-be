@@ -296,6 +296,17 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
   with tier, top weakness, top assets, and players who are a sell in one league
   and a hold in another. Skip redraft (0), guillotine (3), and anything else
   that isn't type 2, with a stated reason.
+- **Summary built, 2026-10-01** (rghart/sleeper-player-be#72):
+  `GET /api/v1/users/:user/summary` (username or user id). Per league: tier,
+  ranks, aging and aged share, top weakness, deficits and surpluses, top 5
+  assets by KTC, picks held and their value, and sell candidates with
+  buyers. Across leagues: players who are a **sell** in one league (listed
+  by `SellSignals`) and a **hold** in another (a contending team starts
+  them). Non-dynasty leagues are listed with the reason they're skipped,
+  and a league that fails to load is listed with its error while the rest
+  still answer. `Intel.UserSummary` is pure and reuses the per-league
+  modules, so a league's line matches its own endpoints. Snapshots load two
+  at a time through the 60s cache.
 - **Window-aware trades:** `TradeFinder` currently disclaims knowing who is
   contending. Pass it the M2 window so contenders favor Now value and
   rebuilders favor Future value and picks. Score by the improvement to both

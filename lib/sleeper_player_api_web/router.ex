@@ -33,6 +33,7 @@ defmodule SleeperPlayerApiWeb.Router do
     get "/adp", AdpController, :index
     get "/adp/:bucket", AdpController, :show
     get "/users/:user_id/activity", ManagerActivityController, :show
+    get "/users/:user/summary", UserSummaryController, :show
   end
 
   scope "/api/legacy", SleeperPlayerApiWeb do
