@@ -68,6 +68,23 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   @one_qb "keeptradecut:1qb"
   @superflex "keeptradecut:sf"
 
+  # KTC's three TE-premium tiers, as its payload names them. Each format's
+  # values carry all three, and only tight ends' differ from the base value
+  # (checked 2026-10-01: Brock Bowers 8,040 base, 8,897 / 9,722 / 9,999; every
+  # other position identical across tiers). See `MarketSettings.ktc_tep_level/1`
+  # for which tier a league gets.
+  @tep_levels ~w(tep tepp teppp)
+
+  @doc "KTC's TE-premium tiers, mildest first."
+  def tep_levels, do: @tep_levels
+
+  @doc "The source a TE-premium tier is stored under: `keeptradecut:sf:tep`."
+  def tep_source(base, level) when level in @tep_levels, do: "#{base}:#{level}"
+
+  @doc "Whether a source is a TE-premium variant rather than a base list."
+  def tep_source?(source) when is_binary(source),
+    do: Enum.any?(@tep_levels, &String.ends_with?(source, ":" <> &1))
+
   @doc """
   The provider family name, used for logging.
 
@@ -216,15 +233,29 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
     with mfl_id when not is_nil(mfl_id) <- to_id_string(player["mflid"]),
          sleeper_id when not is_nil(sleeper_id) <- Map.get(crosswalk, mfl_id),
          {player_id, ""} <- Integer.parse(sleeper_id) do
-      [
-        entry(player_id, @one_qb, player["oneQBValues"], player, now),
-        entry(player_id, @superflex, player["superflexValues"], player, now)
-      ]
+      ([
+         entry(player_id, @one_qb, player["oneQBValues"], player, now),
+         entry(player_id, @superflex, player["superflexValues"], player, now)
+       ] ++ tep_entries(player_id, player, now))
       |> Enum.reject(&is_nil/1)
     else
       _ -> []
     end
   end
+
+  # A tight end's value under each TE-premium tier, for both formats. Only
+  # tight ends: every other position's tiered value is its base value, so
+  # storing them would multiply the table for nothing. A lookup lays these
+  # over the base list (`Intel.player_values_with_tep/2`).
+  defp tep_entries(player_id, %{"position" => "TE"} = player, now) do
+    for {base, key} <- [{@one_qb, "oneQBValues"}, {@superflex, "superflexValues"}],
+        level <- @tep_levels,
+        is_map(get_in(player, [key, level])) do
+      entry(player_id, tep_source(base, level), get_in(player, [key, level]), player, now)
+    end
+  end
+
+  defp tep_entries(_player_id, _player, _now), do: []
 
   defp entry(_player_id, _source, nil, _player, _now), do: nil
 

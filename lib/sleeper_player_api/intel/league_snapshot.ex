@@ -75,7 +75,8 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
     with {:ok, league} <- fetch_league(league_id),
          settings = MarketSettings.from_league(league),
          ktc_source = if(MarketSettings.superflex?(settings), do: @superflex, else: @one_qb),
-         {:ok, ktc, ktc_as_of} <- require_ktc(ktc_source),
+         tep = MarketSettings.ktc_tep_level(league),
+         {:ok, ktc, ktc_as_of} <- require_ktc(ktc_source, tep),
          {:ok, rosters} <- fetch(league_id, "rosters"),
          {:ok, users} <- fetch(league_id, "users"),
          {:ok, drafts} <- fetch(league_id, "drafts") do
@@ -114,6 +115,8 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
            settings: settings,
            player_info: player_info,
            ktc_values: Map.new(ktc["values"], &{&1["playerId"], &1["value"]}),
+           # KTC's TE-premium tier applied to tight ends, or nil.
+           ktc_tep: tep,
            # Kept for the trade finder, which prices picks from the same
            # drafts and traded picks, and measures a contender's lineup on
            # the same projected points the rankings used.
@@ -126,7 +129,7 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
            sources:
              Enum.reject(
                [
-                 %{id: "ktc", provider: ktc_source, as_of: ktc_as_of},
+                 %{id: "ktc", provider: ktc_provider(ktc_source, tep), as_of: ktc_as_of},
                  fc && %{id: "fc", provider: "fantasycalc", as_of: fc_as_of},
                  projections &&
                    %{
@@ -143,8 +146,11 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
     end
   end
 
-  defp require_ktc(source) do
-    case ktc_input(source) do
+  defp ktc_provider(source, nil), do: source
+  defp ktc_provider(source, tep), do: "#{source}:#{tep}"
+
+  defp require_ktc(source, tep) do
+    case ktc_input(source, tep) do
       {nil, _} -> {:error, :no_dynasty_values}
       {ktc, as_of} -> {:ok, ktc, as_of}
     end
@@ -152,8 +158,8 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
 
   # KeepTradeCut values and pick values, in the `/dynasty-values` shape
   # `LeagueRankings` reads. Nil when nothing is stored.
-  defp ktc_input(source) do
-    case Intel.player_values(source) do
+  defp ktc_input(source, tep) do
+    case Intel.player_values_with_tep(source, tep) do
       [] ->
         {nil, nil}
 

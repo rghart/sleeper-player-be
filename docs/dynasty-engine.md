@@ -345,10 +345,17 @@ defaults and model features.
 - **FantasyCalc `numQbs` caps at 2.** 3 or more starting QBs prices as
   superflex, so QBs are undervalued in leagues like 4 QB Madness. Flag it in
   the response. Later, adjust with a QB-scarcity multiplier (config).
-- **No TE-premium parameter** in FantasyCalc (`tePremium` is ignored) or in
-  KTC's 1QB/SF lists. Projections already score TEP correctly via
-  `scoring_settings`. Market values need a TE multiplier scaled by
-  `bonus_rec_te` (config).
+- **TE premium:** FantasyCalc has no parameter for it (`tePremium` is
+  ignored). **KTC does** (corrected 2026-10-01): each format carries three
+  tiers, TE+ (`tep`), TE++ (`tepp`) and TE+++ (`teppp`), and only tight
+  ends' values differ. Since rghart/sleeper-player-be#75 they're ingested
+  (TE rows only, kept out of history) and applied per league by KTC's own
+  guidance (`MarketSettings.ktc_tep_level/1`):
+  - **TE+:** 1 TE with a bonus up to 2× the receivers' PPR;
+  - **TE++:** 2 TE slots, or more than 2×;
+  - **TE+++:** 2 TE slots and a bonus.
+
+  Projections already score TEP via `scoring_settings`.
 - **FantasyCalc pick tiers:** only next year has early/mid/late. Later years
   are round-only, rounds 1–4. Round 5+ needs a fallback (config, default ~0).
 

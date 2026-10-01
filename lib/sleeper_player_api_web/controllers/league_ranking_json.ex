@@ -21,7 +21,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
       name: league["name"],
       season: league["season"],
       format: format(league, settings),
-      notes: notes(league, settings),
+      notes: notes(league, settings, assigns[:ktc_tep]),
       sources: Enum.map(assigns.sources, &source/1),
       missing: assigns.missing,
       tiers: PowerRankings.tiers(),
@@ -54,7 +54,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
   # The known gaps between this league's format and what the market prices
   # (docs/dynasty-engine.md, "Known format gaps"). Stated, not corrected:
   # correcting them would be inventing numbers the providers do not publish.
-  defp notes(league, settings) do
+  defp notes(league, settings, ktc_tep) do
     te_premium = get_in(league, ["scoring_settings", "bonus_rec_te"]) || 0
 
     [
@@ -69,8 +69,14 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
         %{
           code: "te_premium_unpriced",
           detail:
-            "This league adds #{te_premium} per TE reception. Projections score it; " <>
-              "KeepTradeCut and FantasyCalc values do not, so they understate tight ends."
+            "This league adds #{te_premium} per TE reception. Projections score it" <>
+              if(ktc_tep,
+                do:
+                  " and KeepTradeCut values use its #{tep_label(ktc_tep)} tier; FantasyCalc " <>
+                    "has no TE premium, so its values still understate tight ends.",
+                else:
+                  "; KeepTradeCut and FantasyCalc values do not, so they understate tight ends."
+              )
         },
       not settings.dynasty &&
         %{
@@ -92,6 +98,10 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
       rebuildingPicks: t.rebuilding_picks
     }
   end
+
+  defp tep_label("tep"), do: "TE+"
+  defp tep_label("tepp"), do: "TE++"
+  defp tep_label("teppp"), do: "TE+++"
 
   defp source(%{id: id, provider: provider, as_of: as_of}),
     do: %{id: id, provider: provider, asOf: as_of}

@@ -3,7 +3,14 @@ defmodule SleeperPlayerApiWeb.TradeController do
 
   alias SleeperPlayerApi.Client.Sleeper
   alias SleeperPlayerApi.Intel
-  alias SleeperPlayerApi.Intel.{LeagueSnapshot, PickHoldings, TradeFinder, TradeWindow}
+
+  alias SleeperPlayerApi.Intel.{
+    LeagueSnapshot,
+    MarketSettings,
+    PickHoldings,
+    TradeFinder,
+    TradeWindow
+  }
 
   action_fallback SleeperPlayerApiWeb.FallbackController
 
@@ -37,7 +44,10 @@ defmodule SleeperPlayerApiWeb.TradeController do
          {:ok, drafts} <- fetch(league_id, "drafts"),
          {:ok, traded} <- fetch(league_id, "traded_picks"),
          {:ok, mine, others} <- split(rosters, users, user_id) do
-      values = value_lookup(source)
+      # KTC's TE-premium tier for this league, so a tight end is priced the
+      # way the league scores him (`MarketSettings.ktc_tep_level/1`).
+      tep = MarketSettings.ktc_tep_level(league)
+      values = value_lookup(source, tep)
       pick_values = pick_value_lookup(source)
 
       # Picks are keyed to rosters by Sleeper and to managers by this app, so
@@ -82,6 +92,7 @@ defmodule SleeperPlayerApiWeb.TradeController do
 
       render(conn, :index,
         source: source,
+        tep: tep,
         league_id: league_id,
         window_aware: window_context != nil,
         suggestions: TradeFinder.find(mine, others, opts),
@@ -168,9 +179,9 @@ defmodule SleeperPlayerApiWeb.TradeController do
   # the common default and what KeepTradeCut prices out to.
   defp draft_rounds(league), do: get_in(league, ["settings", "draft_rounds"]) || 4
 
-  defp value_lookup(source) do
+  defp value_lookup(source, tep) do
     source
-    |> Intel.player_values()
+    |> Intel.player_values_with_tep(tep)
     |> Map.new(fn v -> {to_string(v.player_id), v.value} end)
   end
 end

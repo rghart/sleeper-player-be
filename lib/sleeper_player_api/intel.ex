@@ -33,6 +33,7 @@ defmodule SleeperPlayerApi.Intel do
   alias SleeperPlayerApi.Repo
   alias SleeperPlayerApi.Client.Sleeper
   alias SleeperPlayerApi.Intel.{Estimator, Availability}
+  alias SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut
 
   alias SleeperPlayerApi.Intel.{
     SleeperUser,
@@ -281,6 +282,11 @@ defmodule SleeperPlayerApi.Intel do
   def record_value_history(values) do
     rows =
       values
+      # KTC's TE-premium variants are current values only. The history table
+      # is already the largest in the database, and a tight end's tiered
+      # series moves with his base one, so a second copy of it would be size
+      # without information.
+      |> Enum.reject(&(is_binary(&1[:source]) and KeepTradeCut.tep_source?(&1.source)))
       |> Enum.flat_map(&history_row/1)
       |> Enum.reduce(%{}, fn row, acc ->
         Map.put(acc, {row.player_id, row.source, row.day}, row)
@@ -687,6 +693,29 @@ defmodule SleeperPlayerApi.Intel do
       }
     )
     |> Repo.all()
+  end
+
+  @doc """
+  `player_values/1` for a KeepTradeCut list under one of its TE-premium
+  tiers (`"tep"`, `"tepp"`, `"teppp"`), or the base list for nil.
+
+  Only tight ends are stored per tier (see the KTC source), so the tier's
+  rows are laid over the base list: every tight end KTC prices under that
+  tier takes his tiered value and rank, and everyone else keeps theirs.
+  """
+  @spec player_values_with_tep(String.t(), String.t() | nil) :: [map]
+  def player_values_with_tep(source, nil), do: player_values(source)
+
+  def player_values_with_tep(source, level) do
+    overrides =
+      source
+      |> KeepTradeCut.tep_source(level)
+      |> player_values()
+      |> Map.new(&{&1.player_id, &1})
+
+    source
+    |> player_values()
+    |> Enum.map(&Map.get(overrides, &1.player_id, &1))
   end
 
   @doc """

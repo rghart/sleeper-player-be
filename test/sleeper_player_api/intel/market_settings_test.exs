@@ -182,4 +182,39 @@ defmodule SleeperPlayerApi.Intel.MarketSettingsTest do
                %{MarketSettings.default() | num_teams: 10}
     end
   end
+
+  describe "ktc_tep_level/1" do
+    defp league(te_slots, bonus, rec \\ 1.0) do
+      %{
+        "roster_positions" => List.duplicate("TE", te_slots) ++ ["QB", "RB", "FLEX"],
+        "scoring_settings" => %{"rec" => rec, "bonus_rec_te" => bonus}
+      }
+    end
+
+    test "no TE premium for one TE and no bonus" do
+      assert MarketSettings.ktc_tep_level(league(1, nil)) == nil
+      assert MarketSettings.ktc_tep_level(league(1, 0)) == nil
+    end
+
+    test "TE+ for a mild bonus, up to double the receivers' PPR" do
+      # League of Boredom (+0.5), 4 QB Madness (+0.75), $uperFlexual (+1.0).
+      for bonus <- [0.5, 0.75, 1.0],
+          do: assert(MarketSettings.ktc_tep_level(league(1, bonus)) == "tep")
+    end
+
+    test "TE++ for more than double, or for two TE slots" do
+      assert MarketSettings.ktc_tep_level(league(1, 1.5)) == "tepp"
+      assert MarketSettings.ktc_tep_level(league(2, 0)) == "tepp"
+      # Half PPR with a full point for tight ends is triple.
+      assert MarketSettings.ktc_tep_level(league(1, 1.0, 0.5)) == "tepp"
+    end
+
+    test "TE+++ for two TE slots and a bonus" do
+      assert MarketSettings.ktc_tep_level(league(2, 0.5)) == "teppp"
+    end
+
+    test "a flex is not a TE slot" do
+      assert MarketSettings.ktc_tep_level(%{"roster_positions" => ["TE", "FLEX", "FLEX"]}) == nil
+    end
+  end
 end

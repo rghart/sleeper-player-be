@@ -295,6 +295,42 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
     assert team(body, 1)["now"]["proj"] == 0
   end
 
+  describe "KTC TE premium" do
+    setup %{sleeper: sleeper, projections: projections} do
+      seed_players()
+      seed_values(["keeptradecut:sf", "fantasycalc"])
+      # Team 3's tight end is worth far more under KTC's TE+ tier.
+      Intel.upsert_player_values([value_row("304", "keeptradecut:sf:tep", 20_000.0)])
+      stub_projections(projections)
+      {:ok, sleeper: sleeper}
+    end
+
+    test "a TE-premium league is priced on KTC's matching tier", %{conn: conn, sleeper: sleeper} do
+      stub_sleeper(sleeper,
+        league: league(%{"scoring_settings" => %{"rec" => 1.0, "bonus_rec_te" => 0.5}})
+      )
+
+      body = conn |> get(~p"/api/v1/leagues/#{@league}/rankings") |> json_response(200)
+
+      assert hd(body["sources"])["provider"] == "keeptradecut:sf:tep"
+      te = team(body, 3)["lineups"]["ktc"]["starters"] |> Enum.find(&(&1["slot"] == "TE"))
+      assert te["value"] == 20_000.0
+
+      assert Enum.find(body["notes"], &(&1["code"] == "te_premium_unpriced"))["detail"] =~
+               "TE+ tier"
+    end
+
+    test "a league without one keeps the base list", %{conn: conn, sleeper: sleeper} do
+      stub_sleeper(sleeper)
+
+      body = conn |> get(~p"/api/v1/leagues/#{@league}/rankings") |> json_response(200)
+
+      assert hd(body["sources"])["provider"] == "keeptradecut:sf"
+      te = team(body, 3)["lineups"]["ktc"]["starters"] |> Enum.find(&(&1["slot"] == "TE"))
+      assert te["value"] == 3000.0
+    end
+  end
+
   describe "M2: windows, weaknesses and sells" do
     setup %{sleeper: sleeper, projections: projections} do
       # Team 3's running back is 28, past the RB cliff of 26; everyone else
