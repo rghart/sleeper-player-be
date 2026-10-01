@@ -115,12 +115,21 @@ defmodule SleeperPlayerApi.Market.AdpTest do
 
       real = rookie_draft(1, "2026", ~w(r1 r2 r3 v1))
       veteran = rookie_draft(2, "2026", ~w(v1 v2 v3 r1))
-      last_year = rookie_draft(3, "2025", ~w(old_rookie old_rookie v1))
+      last_year = rookie_draft(3, "2025", ~w(old_rookie old_rookie old_rookie v1))
 
       {kept, dropped} = Adp.rookie_drafts_only([real, veteran, last_year], years, 2026)
 
       assert Enum.map(kept, & &1.id) == [1, 3]
       assert Enum.map(dropped, & &1.id) == [2]
+    end
+
+    test "drops a draft that is half veterans, the shape the real ones took" do
+      # Both veteran "rookie" drafts in the first production corpus were
+      # exactly half rookies: veterans in the early rounds, rookies after.
+      years = %{"r1" => 0, "r2" => 0, "v1" => 5, "v2" => 14}
+      half = rookie_draft(1, "2026", ~w(v1 v2 r1 r2))
+
+      assert {[], [_]} = Adp.rookie_drafts_only([half], years, 2026)
     end
 
     test "counts only players it knows, and keeps a draft it cannot judge" do
