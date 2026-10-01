@@ -451,7 +451,14 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
       for idea <- body["ideas"] do
         assert %{"give" => _, "get" => _} = idea["market"]
         assert %{"mine" => _, "theirs" => _} = idea["season"]
-        assert abs(idea["market"]["gapPct"]) <= 0.12 + 1.0e-9
+
+        band =
+          Application.fetch_env!(:sleeper_player_api, SleeperPlayerApi.Intel.TradeSearch)[
+            :fair_band
+          ]
+
+        assert abs(idea["market"]["gapPct"]) <= band + 1.0e-9
+        assert idea["market"]["moreEvenThan"] >= 0 and idea["market"]["moreEvenThan"] <= 1
       end
     end
 

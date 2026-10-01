@@ -358,8 +358,17 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
      reads `:ktc_basis`, default **blend**, falling back to crowdsourced
      until the basis is stored. Crowdsourcing overrates picks against real
      trades: a 2027 early 1st was 7,089 crowdsourced and 5,895 from trades.
-  2. **Calibrate the fairness band** from the 1,540 real trades already in
-     `observed_transactions`, valued on the day they happened.
+  2. ✅ **Fairness calibrated from real trades** (rghart/sleeper-player-be#79).
+     1,183 completed two-team dynasty trades (Jan–Oct 2026, 138 leagues),
+     each valued on KTC as of its own date with `TradeValue`, gave a
+     **median adjusted gap of 23.5%**, and only 25% fell within the old 12%
+     band. Player-only trades had a median of 19%. TE trades in TE-premium
+     leagues were no worse, so this isn't the base history lacking TE
+     premium. The band moved to **20%**. Every idea now carries
+     `market.moreEvenThan`, the share of real trades less even than it
+     (`Intel.TradeFairness`). Picks have no history, so they're priced by
+     how many drafts away they were; the method is
+     `priv/calibration/real_trade_gaps.exs`.
   3. **Redraft and keeper leagues:** classify every league and make each
      endpoint behave by type (an original Phase 1 goal).
   4. **Phase 2, the agent.**
