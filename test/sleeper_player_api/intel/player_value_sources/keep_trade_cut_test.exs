@@ -81,11 +81,43 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
   # draft-pick test actually exercises the `mflid: 0` guard: without it the
   # pick drops because nothing is keyed `0`, and the test passes whether or
   # not the guard exists. A sabotage run caught exactly that.
+
+  # A tight end, kept out of `@players` so the counts above stay about the
+  # players they were written for.
+  @tight_end %{
+    "playerName" => "Brock Bowers",
+    "playerID" => 1800,
+    "position" => "TE",
+    "draftYear" => 2024,
+    "mflid" => 16_500,
+    "byeWeek" => 8,
+    "injury" => %{"injuryCode" => 1},
+    # Live shape: each format carries KTC's three TE-premium tiers beside
+    # its base value.
+    "oneQBValues" => %{
+      "value" => 8009,
+      "rank" => 7,
+      "positionalRank" => 1,
+      "tep" => %{"value" => 8863, "rank" => 4, "positionalRank" => 1},
+      "tepp" => %{"value" => 9700, "rank" => 2, "positionalRank" => 1},
+      "teppp" => %{"value" => 9999, "rank" => 1, "positionalRank" => 1}
+    },
+    "superflexValues" => %{
+      "value" => 8040,
+      "rank" => 6,
+      "positionalRank" => 1,
+      "tep" => %{"value" => 8897, "rank" => 5, "positionalRank" => 1},
+      "tepp" => %{"value" => 9722, "rank" => 2, "positionalRank" => 1},
+      "teppp" => %{"value" => 9999, "rank" => 1, "positionalRank" => 1}
+    }
+  }
+
   @crosswalk """
   mfl_id,sportradar_id,fantasypros_id,gsis_id,pff_id,sleeper_id,name
   16162,abc,1,00-1,NA,9509,Jahmyr Gibbs
   16190,def,2,00-2,NA,9500,Zay Flowers
   17472,ghi,3,00-3,NA,13100,Jeremiyah Love
+  16500,stu,7,00-7,NA,11604,Brock Bowers
   15024,jkl,4,00-4,NA,NA,No Sleeper Id
   0,pqr,6,00-6,NA,4242,Not A Real Player
   0634,mno,5,00-5,NA,NA,"Bennett,Michael"
@@ -353,6 +385,50 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
 
     test "a file without the expected headers parses to an empty map" do
       assert PlayerIdCrosswalk.parse("a,b,c\n1,2,3\n") == %{}
+    end
+  end
+
+  describe "TE premium" do
+    test "stores each of KTC's three tiers for a tight end, in both formats", %{bypass: bypass} do
+      stub(bypass, @players ++ [@tight_end])
+
+      assert {:ok, entries} = KeepTradeCut.fetch_values()
+
+      bowers = entries |> Enum.filter(&(&1.player_id == 11604)) |> Map.new(&{&1.source, &1.value})
+
+      assert bowers == %{
+               "keeptradecut:1qb" => 8009.0,
+               "keeptradecut:1qb:tep" => 8863.0,
+               "keeptradecut:1qb:tepp" => 9700.0,
+               "keeptradecut:1qb:teppp" => 9999.0,
+               "keeptradecut:sf" => 8040.0,
+               "keeptradecut:sf:tep" => 8897.0,
+               "keeptradecut:sf:tepp" => 9722.0,
+               "keeptradecut:sf:teppp" => 9999.0
+             }
+    end
+
+    test "stores no tiers for anyone but tight ends", %{bypass: bypass} do
+      stub(bypass, @players ++ [@tight_end])
+
+      assert {:ok, entries} = KeepTradeCut.fetch_values()
+
+      refute Enum.any?(entries, &(KeepTradeCut.tep_source?(&1.source) and &1.player_id != 11604))
+    end
+
+    test "keeps the tiers out of the value history", %{bypass: bypass} do
+      stub(bypass, @players ++ [@tight_end])
+      {:ok, entries} = KeepTradeCut.fetch_values()
+
+      SleeperPlayerApi.Intel.record_value_history(entries)
+
+      sources =
+        SleeperPlayerApi.Repo.all(SleeperPlayerApi.Intel.PlayerValueHistory)
+        |> Enum.map(& &1.source)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert sources == ["keeptradecut:1qb", "keeptradecut:sf"]
     end
   end
 end

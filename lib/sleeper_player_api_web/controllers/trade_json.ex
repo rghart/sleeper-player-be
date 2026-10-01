@@ -24,6 +24,7 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
         source: source,
         league_id: league_id,
         window_aware: window_aware,
+        tep: tep,
         suggestions: suggestions,
         depth: depth,
         starters: starters,
@@ -43,6 +44,8 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
       # Whether suggestions are ordered by what each side gains in its
       # window, or (when the league could not be ranked) by fit alone.
       windowAware: window_aware,
+      # KTC's TE-premium tier the values used, or null for none.
+      tep: tep,
       suggestions: Enum.map(suggestions, &suggestion/1)
     }
   end

@@ -142,6 +142,37 @@ defmodule SleeperPlayerApi.Intel.MarketSettings do
   def superflex?(settings), do: settings.num_qbs >= 2
 
   @doc """
+  Which of KeepTradeCut's TE-premium tiers a league gets, or nil for none.
+
+  KTC's own guidance (from its rankings page, read 2026-10-01):
+
+    * **TE+**: start 1 TE, a mild or moderate scoring bonus (+0.5 or +0.75
+      PPR, about 1.5-2x what receivers get per catch).
+    * **TE++**: start 2 TEs, *or* an extreme bonus (more than 2x the
+      receivers' PPR).
+    * **TE+++**: start 2 TEs *and* a bonus.
+
+  Read here as: dedicated `TE` slots (a flex does not count), and the TE
+  bonus per catch against the league's own reception scoring. In a league
+  with no reception points any bonus is "more than 2x".
+  """
+  @spec ktc_tep_level(map) :: String.t() | nil
+  def ktc_tep_level(league) when is_map(league) do
+    te_slots = Enum.count(league["roster_positions"] || [], &(&1 == "TE"))
+    bonus = get_in(league, ["scoring_settings", "bonus_rec_te"]) || 0
+    rec = get_in(league, ["scoring_settings", "rec"]) || 0
+
+    extreme = bonus > 0 and (rec <= 0 or (rec + bonus) / rec > 2)
+
+    cond do
+      te_slots >= 2 and bonus > 0 -> "teppp"
+      te_slots >= 2 or extreme -> "tepp"
+      bonus > 0 -> "tep"
+      true -> nil
+    end
+  end
+
+  @doc """
   These settings as FantasyCalc's query string.
 
   Clamped to what the provider actually prices - see `effective/1`. This
