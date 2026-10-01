@@ -251,8 +251,26 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
   users. 80 drafts were superflex rookie, 11 1QB rookie, and 5 startups.
   Startups are scarce (one per league), so the startup buckets will fill
   over weeks, not nights.
-- **Next:** ADP per bucket (mean, median, spread, n, how often drafted) and
-  the comparison with Sleeper's ADP columns, once a few nights of data are in.
+
+**ADP built, 2026-10-01** (rghart/sleeper-player-be#68):
+
+- `GET /api/v1/adp` shows corpus progress per bucket against the target.
+  `GET /api/v1/adp/:bucket` (e.g. `startup-sf-tep`) returns per player:
+  mean pick, median, spread, min/max, `n` drafts and `rate` (the share of
+  the bucket's drafts that took him), with Sleeper's ADP beside it. A
+  player needs ≥ 5 drafts (config).
+- **Comparison** (the decision gate): Spearman over shared players, mean
+  rank difference, and the biggest disagreements.
+- **Sleeper's columns:** `adp_dynasty_2qb` (superflex) and `adp_dynasty_ppr`
+  (1QB). `adp_rookie` and `adp_dynasty` are empty for every player
+  (checked 2026-10-01), so rookie buckets compare against startup ADP
+  ranked among the same rookies. There is no TE-premium column. The
+  response states both.
+- **First real read**, from a 400-call local crawl (not production): rookie
+  SF TEP, 77 drafts: ρ 0.953, mean |rank diff| 4.4. Rookie SF, 29 drafts:
+  ρ 0.935, 3.6. Startup SF TEP, 5 drafts: ρ 0.979, 13.3 over 296 players.
+  Sleeper's order broadly agrees, with players 12–19 places apart in rookie
+  drafts. **Decide keep/replace/blend only once buckets reach ~150 drafts.**
 
 ### M4: Summary and window-aware trades
 

@@ -432,6 +432,12 @@ defmodule SleeperPlayerApi.Intel do
     |> Repo.all()
   end
 
+  @doc "The latest season with projections stored, or nil."
+  @spec latest_projections_season() :: integer | nil
+  def latest_projections_season do
+    Repo.one(from(p in PlayerProjection, select: max(p.season)))
+  end
+
   @doc "Whether any projections are stored for `season`."
   @spec projections_stored?(integer) :: boolean
   def projections_stored?(season) do

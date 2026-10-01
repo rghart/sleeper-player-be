@@ -162,6 +162,41 @@ defmodule SleeperPlayerApi.Market do
     Map.new(Format.buckets(), &{&1, Map.get(counts, &1, 0)})
   end
 
+  @doc """
+  The complete drafts in one format bucket that started at or after `since`,
+  each with its picks: `[%{id, picks: [%{pick_no, player_id}]}]`, the shape
+  `Market.Adp.compute/1` reads.
+  """
+  def bucket_drafts({kind, qb, tep}, since) do
+    query =
+      from(d in Draft,
+        where: d.complete and d.kind == ^kind and d.started_at >= ^since,
+        select: d.id
+      )
+
+    query =
+      if qb == "sf",
+        do: where(query, [d], d.qb_slots >= 2),
+        else: where(query, [d], d.qb_slots < 2)
+
+    query =
+      if tep == "tep",
+        do: where(query, [d], d.te_premium > 0.0),
+        else: where(query, [d], is_nil(d.te_premium) or d.te_premium <= 0.0)
+
+    ids = Repo.all(query)
+
+    picks =
+      from(p in Pick,
+        where: p.draft_id in ^ids,
+        select: {p.draft_id, %{pick_no: p.pick_no, player_id: p.player_id}}
+      )
+      |> Repo.all()
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    Enum.map(ids, &%{id: &1, picks: Map.get(picks, &1, [])})
+  end
+
   defp number(n) when is_number(n), do: n * 1.0
   defp number(_), do: nil
 

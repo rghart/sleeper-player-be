@@ -131,6 +131,10 @@ config :sleeper_player_api, SleeperPlayerApi.Tasks.CrawlMarketDrafts,
 
 # Which drafts count: completed dynasty drafts with at least 8 teams from the
 # last year; a startup is an all-players draft of 15+ rounds.
+# ADP: the fewest drafts a player must go in to get one. An average over
+# two picks is an anecdote.
+config :sleeper_player_api, SleeperPlayerApi.Market.Adp, min_drafts: 5
+
 config :sleeper_player_api, SleeperPlayerApi.Market.Format,
   startup_min_rounds: 15,
   min_teams: 8,
