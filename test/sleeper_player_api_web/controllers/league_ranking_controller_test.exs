@@ -267,6 +267,31 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
     end
   end
 
+  test "a league that has not drafted still ranks on projections, all at zero", %{
+    conn: conn,
+    sleeper: sleeper,
+    projections: projections
+  } do
+    # Nobody is rostered, so no projection rows are read - which is not the
+    # same as projections being unavailable, and must not be reported as it.
+    seed_players()
+    seed_values(["keeptradecut:sf", "fantasycalc"])
+    stub_sleeper(sleeper)
+
+    Bypass.stub(sleeper, "GET", "/league/#{@league}/rosters", fn conn ->
+      empty = Enum.map(rosters(), &Map.put(&1, "players", []))
+      Plug.Conn.resp(conn, 200, Jason.encode!(empty))
+    end)
+
+    stub_projections(projections)
+
+    body = conn |> get(~p"/api/v1/leagues/#{@league}/rankings") |> json_response(200)
+
+    assert body["missing"] == []
+    assert "projections" in Enum.map(body["sources"], & &1["id"])
+    assert team(body, 1)["now"]["proj"] == 0
+  end
+
   test "leaves picks out, and says so, when traded picks cannot be read", %{
     conn: conn,
     sleeper: sleeper,
