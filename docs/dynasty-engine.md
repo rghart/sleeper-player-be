@@ -119,9 +119,11 @@ trades all read the best lineup and the tier.
 5. **Done when** the Elixir output matches the golden JSON. Switching the FE
    panel to the endpoint and deleting the JS copy is a separate follow-up PR.
 
-**Progress, 2026-09-30.** Steps 1 and 2 merged in
-rghart/sleeper-player-be#60 and deployed. Steps 3 and 4 are in the
-follow-up PR (`dynasty-engine-m1-endpoint`).
+**Progress, 2026-09-30.** Steps 1–2 shipped in rghart/sleeper-player-be#60,
+steps 3–4 in #61, both deployed. Checked live: the endpoint matches the app's
+own `rankLeague` exactly (z-scores, tiers, net picks) on all five of Ryan's
+dynasty leagues. Warm requests take ~0.35s. **Remaining for M1:** switch the
+app's Power Rankings panel to the endpoint, and delete the JS copy.
 
 - **Fixtures:** `test/support/fixtures/power_rankings/` holds three leagues
   (`sf_te05_12t`, `qb3_sf_te075_8t`, `qb2_sf_te1_10t`), captured by

@@ -217,6 +217,14 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
       assert Enum.map(body["sources"], & &1["id"]) == ~w(ktc fc projections)
       assert body["missing"] == []
       assert length(body["tiers"]) == 5
+
+      assert body["thresholds"] == %{
+               "strongNow" => 0.5,
+               "weakNow" => -0.5,
+               "allInFuture" => -0.5,
+               "rebuildingFuture" => 0,
+               "rebuildingPicks" => 0
+             }
     end
 
     test "prices a weak team's traded 1st as early, for the team that holds it", %{conn: conn} do
