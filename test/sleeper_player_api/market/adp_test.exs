@@ -96,4 +96,46 @@ defmodule SleeperPlayerApi.Market.AdpTest do
       assert Adp.compare(ours(~w(a b c)), sleeper) == nil
     end
   end
+
+  describe "rookie_drafts_only/3" do
+    defp rookie_draft(id, season, player_ids),
+      do: %{id: id, season: season, picks: Enum.map(player_ids, &%{player_id: &1, pick_no: 1})}
+
+    test "keeps a draft of this season's rookies and drops a veteran draft flagged as rookie" do
+      # In 2026, a 2026 rookie has 0 years; a 2025 rookie 1.
+      years = %{
+        "r1" => 0,
+        "r2" => 0,
+        "r3" => 0,
+        "v1" => 5,
+        "v2" => 14,
+        "v3" => 2,
+        "old_rookie" => 1
+      }
+
+      real = rookie_draft(1, "2026", ~w(r1 r2 r3 v1))
+      veteran = rookie_draft(2, "2026", ~w(v1 v2 v3 r1))
+      last_year = rookie_draft(3, "2025", ~w(old_rookie old_rookie v1))
+
+      {kept, dropped} = Adp.rookie_drafts_only([real, veteran, last_year], years, 2026)
+
+      assert Enum.map(kept, & &1.id) == [1, 3]
+      assert Enum.map(dropped, & &1.id) == [2]
+    end
+
+    test "counts only players it knows, and keeps a draft it cannot judge" do
+      draft = rookie_draft(1, "2026", ~w(r1 unknown1 unknown2))
+
+      assert {[_], []} = Adp.rookie_drafts_only([draft], %{"r1" => 0}, 2026)
+      assert {[_], []} = Adp.rookie_drafts_only([draft], %{}, 2026)
+      assert {[_], []} = Adp.rookie_drafts_only([%{draft | season: nil}], %{"r1" => 5}, 2026)
+    end
+  end
+
+  test "comparable/2 leaves kickers and defenses out of the comparison" do
+    players = for id <- ~w(qb k def wr), do: %{player_id: id, adp: 1.0}
+    positions = %{"qb" => "QB", "k" => "K", "def" => "DEF", "wr" => "WR"}
+
+    assert players |> Adp.comparable(positions) |> Enum.map(& &1.player_id) == ~w(qb wr)
+  end
 end

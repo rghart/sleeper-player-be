@@ -271,6 +271,19 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
   ρ 0.935, 3.6. Startup SF TEP, 5 drafts: ρ 0.979, 13.3 over 296 players.
   Sleeper's order broadly agrees, with players 12–19 places apart in rookie
   drafts. **Decide keep/replace/blend only once buckets reach ~150 drafts.**
+- **First production crawl** (10:15 UTC 2026-10-01): 349 drafts (335
+  complete, 37,198 picks, 4 MB) in 4 minutes. The frontier holds 4,389
+  users, 2 leagues out. rookie-sf-tep was already full at 150;
+  startup-sf-tep had 65.
+- **Two quality fixes from that data** (rghart/sleeper-player-be#69):
+  1. Sleeper's rookie flag also covers some veteran supplemental drafts.
+     One took Pat Freiermuth and a 14-year kicker ahead of the top rookie
+     and moved every top rookie's mean pick. A rookie draft now needs ≥ 50%
+     of its picks to be that season's rookies (config). The rest are
+     excluded at ADP time and counted in `excludedDrafts`.
+  2. The startup comparison's biggest "disagreements" were all kickers
+     (Dicker ~94 here vs 282 on Sleeper): leagues that start a K draft one.
+     K and DEF keep their ADP but are left out of the comparison.
 
 ### M4: Summary and window-aware trades
 

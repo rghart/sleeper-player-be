@@ -136,7 +136,9 @@ defmodule SleeperPlayerApi.Market.Format do
         kind == "rookie" &&
           "Sleeper's rookie ADP is empty, so this is its startup ADP ranked among these rookies.",
         tep == "tep" &&
-          "Sleeper has no TE-premium ADP; this compares against its non-premium column."
+          "Sleeper has no TE-premium ADP; this compares against its non-premium column.",
+        "Kickers and defenses are left out of the comparison: whether a league drafts " <>
+          "them depends on its lineup, not the market."
       ]
       |> Enum.filter(& &1)
 

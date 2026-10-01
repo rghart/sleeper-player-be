@@ -432,6 +432,23 @@ defmodule SleeperPlayerApi.Intel do
     |> Repo.all()
   end
 
+  @doc """
+  `player_id => years_exp` for the ids given: Sleeper's count of seasons
+  played, as of the last player dump. A rookie of season S has `years_exp`
+  equal to the current season minus S.
+  """
+  @spec player_years_exp([String.t() | integer]) :: %{String.t() => integer}
+  def player_years_exp(player_ids) do
+    ids = player_ids |> Enum.map(&to_string/1) |> Enum.uniq()
+
+    from(p in SleeperPlayerApi.Sleeper.Player,
+      where: p.player_id in ^ids and not is_nil(p.years_exp),
+      select: {p.player_id, p.years_exp}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   @doc "The latest season with projections stored, or nil."
   @spec latest_projections_season() :: integer | nil
   def latest_projections_season do
