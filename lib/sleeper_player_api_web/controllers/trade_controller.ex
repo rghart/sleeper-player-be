@@ -3,8 +3,7 @@ defmodule SleeperPlayerApiWeb.TradeController do
 
   alias SleeperPlayerApi.Client.Sleeper
   alias SleeperPlayerApi.Intel
-  alias SleeperPlayerApi.Intel.PickHoldings
-  alias SleeperPlayerApi.Intel.TradeFinder
+  alias SleeperPlayerApi.Intel.{LeagueSnapshot, PickHoldings, TradeFinder, TradeWindow}
 
   action_fallback SleeperPlayerApiWeb.FallbackController
 
@@ -66,9 +65,25 @@ defmodule SleeperPlayerApiWeb.TradeController do
         my_picks: Map.get(picks_by_user, user_id, [])
       }
 
+      # Windows when the league can be ranked: each side's gain in its
+      # window then orders the suggestions (`Intel.TradeWindow`). The
+      # snapshot is the one `/rankings` uses, usually already cached. A
+      # league it cannot rank still gets suggestions, ordered by fit.
+      window_context =
+        case LeagueSnapshot.load(league_id) do
+          {:ok, snapshot} -> TradeWindow.context(snapshot, pick_values)
+          {:error, _} -> nil
+        end
+
+      opts =
+        if window_context,
+          do: Map.put(opts, :window_gain, &TradeWindow.gain(window_context, &1, &2, &3, &4, &5)),
+          else: opts
+
       render(conn, :index,
         source: source,
         league_id: league_id,
+        window_aware: window_context != nil,
         suggestions: TradeFinder.find(mine, others, opts),
         depth: TradeFinder.depth(mine.player_ids, opts),
         starters: opts.starters,

@@ -13,8 +13,25 @@ defmodule SleeperPlayerApiWeb.TradeControllerTest do
 
   setup do
     bypass = Bypass.open()
+    projections = Bypass.open()
     Application.put_env(:sleeper_player_api, :sleeper_base_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:sleeper_player_api, :sleeper_base_url) end)
+
+    Application.put_env(
+      :sleeper_player_api,
+      :sleeper_projections_base_url,
+      "http://localhost:#{projections.port}"
+    )
+
+    # No projections: the window measures a lineup on KTC instead.
+    Bypass.stub(projections, "GET", "/projections/nfl/2026", &Plug.Conn.resp(&1, 200, "[]"))
+    SleeperPlayerApi.Intel.LeagueSnapshotCache.clear()
+
+    on_exit(fn ->
+      Application.delete_env(:sleeper_player_api, :sleeper_base_url)
+      Application.delete_env(:sleeper_player_api, :sleeper_projections_base_url)
+      SleeperPlayerApi.Intel.LeagueSnapshotCache.clear()
+    end)
+
     {:ok, bypass: bypass}
   end
 
@@ -38,11 +55,11 @@ defmodule SleeperPlayerApiWeb.TradeControllerTest do
     })
   end
 
-  defp seed_value(player_id, value) do
+  defp seed_value(player_id, value, source \\ "keeptradecut:sf") do
     Intel.upsert_player_values([
       %{
         player_id: String.to_integer(player_id),
-        source: "keeptradecut:sf",
+        source: source,
         value: value,
         overall_rank: 1,
         position_rank: 1,
@@ -122,6 +139,44 @@ defmodule SleeperPlayerApiWeb.TradeControllerTest do
     assert first["partnerName"] == "babaghanoush123"
     assert Enum.all?(first["give"], &(&1 in @mine_rbs))
     assert Enum.all?(first["get"], &(&1 in @their_wrs))
+  end
+
+  test "ranks by each side's window when the league can be ranked", %{bypass: bypass, conn: conn} do
+    # This league has no superflex, so the snapshot ranks it on 1QB values;
+    # seeding them lets it rank, which turns the windows on.
+    seed_board()
+
+    for id <- @mine_rbs ++ @mine_wrs ++ @their_wrs ++ @their_rbs do
+      seed_value(id, 5000.0, "keeptradecut:1qb")
+    end
+
+    stub_league(bypass)
+
+    body = conn |> get(~p"/api/v1/leagues/#{@league}/trades?user_id=#{@me}") |> json_response(200)
+
+    assert body["windowAware"] == true
+    assert [first | _] = body["suggestions"]
+    assert %{"tier" => _, "gain" => _, "now" => _, "future" => _} = first["myWindow"]
+    assert %{"tier" => _} = first["theirWindow"]
+    assert is_number(first["mutualGain"])
+
+    gains = Enum.map(body["suggestions"], & &1["mutualGain"])
+    assert gains == Enum.sort(gains, :desc)
+  end
+
+  test "still suggests, ordered by fit, when the league cannot be ranked", %{
+    bypass: bypass,
+    conn: conn
+  } do
+    # Only superflex values are seeded and the league is 1QB, so there is
+    # nothing to rank it on; trades priced on the superflex list still work.
+    seed_board()
+    stub_league(bypass)
+
+    body = conn |> get(~p"/api/v1/leagues/#{@league}/trades?user_id=#{@me}") |> json_response(200)
+
+    assert body["windowAware"] == false
+    assert [%{"myWindow" => nil, "mutualGain" => nil} | _] = body["suggestions"]
   end
 
   test "sends the roster shape it matched on, not just the verdict", %{bypass: bypass, conn: conn} do

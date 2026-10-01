@@ -93,6 +93,36 @@ defmodule SleeperPlayerApi.Intel.TradeFinderTest do
       assert best.partner_name == "them"
     end
 
+    test "with windows, ranks by what the side that gains less gains, not by fit", ctx do
+      # Every 1-for-1 RB-for-WR swap fits equally well. The window says one
+      # pair is worth more to both sides, so it should lead.
+      gain = fn
+        1, ["my-rb4"], ["th-wr4"], _, _ -> %{tier: "contender", gain: 0.3, now: 0.3, future: 0.0}
+        2, ["th-wr4"], ["my-rb4"], _, _ -> %{tier: "rebuilding", gain: 0.2, now: 0.0, future: 0.2}
+        _user, _give, _get, _, _ -> %{tier: "middle", gain: 0.01, now: 0.01, future: 0.01}
+      end
+
+      [best | _] =
+        TradeFinder.find(
+          ctx.mine,
+          [ctx.theirs],
+          opts(ctx.positions, ctx.values, %{window_gain: gain, per_partner: 50})
+        )
+
+      assert {best.give, best.get} == {["my-rb4"], ["th-wr4"]}
+      # The smaller of the two sides' gains is what it is ranked by.
+      assert best.mutual_gain == 0.2
+      assert best.my_window.tier == "contender"
+      assert best.their_window.tier == "rebuilding"
+    end
+
+    test "without windows, suggestions carry none and rank by fit as before", ctx do
+      [best | _] = TradeFinder.find(ctx.mine, [ctx.theirs], opts(ctx.positions, ctx.values))
+
+      refute Map.has_key?(best, :mutual_gain)
+      refute Map.has_key?(best, :my_window)
+    end
+
     test "both sides must want it, not just the asking one", ctx do
       # They are now deep at RB too, so taking my running back helps them
       # with nothing and no suggestion should survive.

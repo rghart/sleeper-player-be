@@ -23,6 +23,7 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
   def index(%{
         source: source,
         league_id: league_id,
+        window_aware: window_aware,
         suggestions: suggestions,
         depth: depth,
         starters: starters,
@@ -39,6 +40,9 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
         # and showing one without the other points at the wrong yardstick.
         leagueAverage: league_average
       },
+      # Whether suggestions are ordered by what each side gains in its
+      # window, or (when the league could not be ranked) by fit alone.
+      windowAware: window_aware,
       suggestions: Enum.map(suggestions, &suggestion/1)
     }
   end
@@ -59,9 +63,19 @@ defmodule SleeperPlayerApiWeb.TradeJSON do
       rawGap: round_to(s.raw_gap),
       adjustedGap: round_to(s.adjusted_gap),
       myFit: s.my_fit,
-      theirFit: s.their_fit
+      theirFit: s.their_fit,
+      # What the trade is worth to each side in its window, as a share of the
+      # league average: a contender's lineup now, a rebuilder's future, the
+      # mean of both for a team in the middle. `mutualGain` is the smaller,
+      # which is what the list is ordered by.
+      myWindow: window(s[:my_window]),
+      theirWindow: window(s[:their_window]),
+      mutualGain: s[:mutual_gain]
     }
   end
+
+  defp window(nil), do: nil
+  defp window(w), do: %{tier: w.tier, gain: w.gain, now: w.now, future: w.future}
 
   # `tier` travels even though it is always "mid" today: the caller is
   # rendering "2027 2nd" and the tier is the part of that claim it did not

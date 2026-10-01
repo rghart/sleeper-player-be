@@ -31,7 +31,8 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
     LeagueSnapshotCache,
     MarketSettings,
     MarketValues,
-    PickHoldings
+    PickHoldings,
+    Projections
   }
 
   alias SleeperPlayerApi.Tasks.RefreshProjections
@@ -68,15 +69,17 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
   end
 
   defp build(league_id) do
+    # KTC is checked straight after the league, before the other reads:
+    # without it nothing can be ranked, so there is no point spending rosters,
+    # users, drafts, FantasyCalc, traded picks and projections on the league.
     with {:ok, league} <- fetch_league(league_id),
+         settings = MarketSettings.from_league(league),
+         ktc_source = if(MarketSettings.superflex?(settings), do: @superflex, else: @one_qb),
+         {:ok, ktc, ktc_as_of} <- require_ktc(ktc_source),
          {:ok, rosters} <- fetch(league_id, "rosters"),
          {:ok, users} <- fetch(league_id, "users"),
          {:ok, drafts} <- fetch(league_id, "drafts") do
-      settings = MarketSettings.from_league(league)
-      ktc_source = if MarketSettings.superflex?(settings), do: @superflex, else: @one_qb
       season = PickHoldings.to_season(league["season"])
-
-      {ktc, ktc_as_of} = ktc_input(ktc_source)
       {fc, fc_as_of, fc_missing} = fc_input(settings)
       {traded, traded_missing} = traded_input(league_id)
       player_ids = rosters |> Enum.flat_map(&(&1["players"] || [])) |> Enum.uniq()
@@ -111,6 +114,14 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
            settings: settings,
            player_info: player_info,
            ktc_values: Map.new(ktc["values"], &{&1["playerId"], &1["value"]}),
+           # Kept for the trade finder, which prices picks from the same
+           # drafts and traded picks, and measures a contender's lineup on
+           # the same projected points the rankings used.
+           drafts: drafts,
+           traded_picks: traded,
+           projected_points:
+             projections &&
+               Projections.projection_values(projections, league["scoring_settings"]),
            teams: teams,
            sources:
              Enum.reject(
@@ -129,6 +140,13 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
            missing: Enum.reject([fc_missing, traded_missing, projections_missing], &is_nil/1)
          }}
       end
+    end
+  end
+
+  defp require_ktc(source) do
+    case ktc_input(source) do
+      {nil, _} -> {:error, :no_dynasty_values}
+      {ktc, as_of} -> {:ok, ktc, as_of}
     end
   end
 
