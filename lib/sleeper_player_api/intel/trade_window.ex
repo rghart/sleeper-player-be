@@ -49,9 +49,11 @@ defmodule SleeperPlayerApi.Intel.TradeWindow do
         {to_string(roster["owner_id"]), %{roster: roster, tier: team && team.tiers[:blend]}}
       end
 
-    lineup_total = fn roster ->
-      PowerRankings.best_lineup(roster, positions, snapshot.player_info, &now_values[&1]).total
+    lineup = fn roster ->
+      PowerRankings.best_lineup(roster, positions, snapshot.player_info, &now_values[&1])
     end
+
+    lineup_total = &lineup.(&1).total
 
     future_value = fn id ->
       if Aging.past_cutoff?(snapshot.player_info[id]), do: 0, else: snapshot.ktc_values[id] || 0
@@ -69,7 +71,10 @@ defmodule SleeperPlayerApi.Intel.TradeWindow do
       pick_values: pick_values,
       mean_now: mean(Enum.map(rosters, lineup_total)),
       mean_future: mean(Enum.map(rosters, &sum(Enum.map(&1["players"] || [], future_value)))),
-      lineup_total: lineup_total
+      lineup_total: lineup_total,
+      # Who starts where under the win-now values, for callers that need the
+      # lineup itself rather than its total (`TradeSearch`).
+      lineup_starters: &Enum.filter(lineup.(&1).starters, fn s -> s.player_id end)
     }
   end
 
@@ -83,8 +88,11 @@ defmodule SleeperPlayerApi.Intel.TradeWindow do
 
   @doc """
   One side's gain: `user_id` gives `give` and `give_picks`, gets `get` and
-  `get_picks`. Returns `%{tier, gain, now, future}`, or nil for a user with no
-  roster in the snapshot.
+  `get_picks`. Returns `%{tier, gain, now, future, now_points}` - `now_points`
+  is the raw change in the lineup's win-now total (projected points, or KTC
+  without projections) - or nil for a user with no roster in the snapshot.
+  A pick carrying its own `value` is priced at it; otherwise at
+  `pick_values`.
   """
   def gain(context, user_id, give, get, give_picks, get_picks) do
     case context.by_user[to_string(user_id)] do
@@ -95,11 +103,8 @@ defmodule SleeperPlayerApi.Intel.TradeWindow do
         players = roster["players"] || []
         after_trade = Map.put(roster, "players", (players -- give) ++ get)
 
-        now =
-          share(
-            context.lineup_total.(after_trade) - context.lineup_total.(roster),
-            context.mean_now
-          )
+        now_points = context.lineup_total.(after_trade) - context.lineup_total.(roster)
+        now = share(now_points, context.mean_now)
 
         future =
           share(
@@ -108,7 +113,13 @@ defmodule SleeperPlayerApi.Intel.TradeWindow do
             context.mean_future
           )
 
-        %{tier: tier, gain: blend(tier, now, future), now: now, future: future}
+        %{
+          tier: tier,
+          gain: blend(tier, now, future),
+          now: now,
+          future: future,
+          now_points: now_points
+        }
     end
   end
 
@@ -117,7 +128,8 @@ defmodule SleeperPlayerApi.Intel.TradeWindow do
   defp blend(_tier, now, future), do: (now + future) / 2
 
   defp pick_total(picks, context),
-    do: sum(Enum.map(picks || [], &(context.pick_values[{&1.season, &1.round}] || 0)))
+    do:
+      sum(Enum.map(picks || [], &(&1[:value] || context.pick_values[{&1.season, &1.round}] || 0)))
 
   defp share(_delta, mean) when mean in [nil, 0, 0.0], do: 0.0
   defp share(delta, mean), do: delta / mean

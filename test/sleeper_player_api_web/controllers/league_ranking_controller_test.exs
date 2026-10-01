@@ -415,6 +415,51 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
     end
   end
 
+  describe "GET /api/v1/leagues/:league_id/trade-ideas" do
+    setup %{sleeper: sleeper, projections: projections} do
+      seed_players()
+      seed_values(["keeptradecut:sf", "fantasycalc"])
+      stub_sleeper(sleeper)
+      stub_projections(projections)
+      :ok
+    end
+
+    test "answers in the default mode with ideas' market and season numbers", %{conn: conn} do
+      body =
+        conn |> get(~p"/api/v1/leagues/#{@league}/trade-ideas?user_id=u1") |> json_response(200)
+
+      assert body["mode"] == "window"
+      assert body["nowSource"] == "proj"
+      assert is_list(body["ideas"])
+
+      for idea <- body["ideas"] do
+        assert %{"give" => _, "get" => _} = idea["market"]
+        assert %{"mine" => _, "theirs" => _} = idea["season"]
+        assert abs(idea["market"]["gapPct"]) <= 0.12 + 1.0e-9
+      end
+    end
+
+    test "takes every mode, and refuses one it does not know", %{conn: conn} do
+      for mode <- ~w(window win_now market) do
+        body =
+          build_conn()
+          |> get(~p"/api/v1/leagues/#{@league}/trade-ideas?user_id=u1&mode=#{mode}")
+          |> json_response(200)
+
+        assert body["mode"] == mode
+      end
+
+      conn
+      |> get(~p"/api/v1/leagues/#{@league}/trade-ideas?user_id=u1&mode=vibes")
+      |> json_response(422)
+    end
+
+    test "is a 404 for a manager not in the league and a 422 without one", %{conn: conn} do
+      conn |> get(~p"/api/v1/leagues/#{@league}/trade-ideas?user_id=nobody") |> json_response(404)
+      build_conn() |> get(~p"/api/v1/leagues/#{@league}/trade-ideas") |> json_response(422)
+    end
+  end
+
   test "leaves picks out, and says so, when traded picks cannot be read", %{
     conn: conn,
     sleeper: sleeper,
