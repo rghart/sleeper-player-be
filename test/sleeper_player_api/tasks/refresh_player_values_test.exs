@@ -146,7 +146,7 @@ defmodule SleeperPlayerApi.Tasks.RefreshPlayerValuesTest do
     assert {1, _} = SleeperPlayerApi.Intel.record_value_history(row.(4400.0, today))
 
     assert [4000.0, 4400.0] =
-             Repo.all(PlayerValueHistory) |> Enum.sort_by(& &1.day) |> Enum.map(& &1.value)
+             Repo.all(PlayerValueHistory) |> Enum.sort_by(& &1.day, Date) |> Enum.map(& &1.value)
   end
 
   test "two points for the same day in one call collapse, last one winning" do

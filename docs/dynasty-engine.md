@@ -119,8 +119,9 @@ trades all read the best lineup and the tier.
 5. **Done when** the Elixir output matches the golden JSON. Switching the FE
    panel to the endpoint and deleting the JS copy is a separate follow-up PR.
 
-**Progress, 2026-09-30.** Steps 1 and 2 are done on branch
-`dynasty-engine-m1` (not yet committed or pushed).
+**Progress, 2026-09-30.** Steps 1 and 2 merged in
+rghart/sleeper-player-be#60 and deployed. Steps 3 and 4 are in the
+follow-up PR (`dynasty-engine-m1-endpoint`).
 
 - **Fixtures:** `test/support/fixtures/power_rankings/` holds three leagues
   (`sf_te05_12t`, `qb3_sf_te075_8t`, `qb2_sf_te1_10t`), captured by
@@ -135,6 +136,18 @@ trades all read the best lineup and the tier.
 - **Parity:** `league_rankings_test.exs` reproduces the JS output field by
   field (floats to 1e-9 relative). A mutation check confirmed it fails when an
   ADP value or a tier line moves.
+- **Projections (step 3):** a `player_projections` table holding Sleeper's raw
+  season stats, so each league scores them itself. A nightly job runs at
+  3:45am Central for the current `league_season`. `RefreshProjections.ensure/1`
+  fills a season on first request. An empty or failed fetch never prunes
+  what's stored.
+- **Endpoint (step 4):** `GET /api/v1/leagues/:id/rankings`. Live Sleeper
+  reads, KTC and pick values from the DB, FantasyCalc via `MarketValues`.
+  The response carries `sources` (with `asOf`), `missing` (which source
+  dropped out and why), `notes` (format gaps the market doesn't price: 3+ QBs,
+  TE premium, not dynasty), the tier legend, and per-team ranks, lineups and
+  pick detail. A 503 when no KTC values are stored, and a 404 for an
+  unknown league.
 - **Follow-up:** `PowerRankings.owned_picks/4` duplicates
   `PickHoldings.build/4`, which drops the original roster that pricing needs.
   Fold them into one after the endpoint lands.
