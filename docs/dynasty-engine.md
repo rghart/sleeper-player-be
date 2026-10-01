@@ -369,8 +369,10 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
      (`Intel.TradeFairness`). Picks have no history, so they're priced by
      how many drafts away they were; the method is
      `priv/calibration/real_trade_gaps.exs`.
-  3. **Redraft and keeper leagues:** classify every league and make each
-     endpoint behave by type (an original Phase 1 goal).
+  3. ~~**Redraft and keeper leagues**~~: **skipped** (Ryan, 2026-10-01). The
+     engine is dynasty-only. Non-dynasty leagues stay flagged: `/rankings`
+     notes `not_dynasty`, and `/users/:user/summary` skips redraft, keeper
+     and guillotine leagues with a reason.
   4. **Phase 2, the agent.**
 
   Deferred: the app's Trades panel switch to `/trade-ideas`, a
