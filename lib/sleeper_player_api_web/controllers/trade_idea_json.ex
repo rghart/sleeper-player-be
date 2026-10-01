@@ -1,6 +1,8 @@
 defmodule SleeperPlayerApiWeb.TradeIdeaJSON do
   @moduledoc "Renders `Intel.TradeSearch` ideas, camelCase like the rest of this API."
 
+  alias SleeperPlayerApi.Intel.TradeFairness
+
   def show(assigns) do
     %{
       leagueId: assigns.league_id,
@@ -28,7 +30,10 @@ defmodule SleeperPlayerApiWeb.TradeIdeaJSON do
       market: %{
         give: i.give_value,
         get: i.get_value,
-        gapPct: (i.get_value - i.give_value) / max(max(i.give_value, i.get_value), 1)
+        gapPct: (i.get_value - i.give_value) / max(max(i.give_value, i.get_value), 1),
+        # The share of real accepted trades less even than this one: 0.8 is
+        # "more even than 80% of trades managers actually made".
+        moreEvenThan: TradeFairness.more_even_than(TradeFairness.gap(i.give_value, i.get_value))
       },
       # Season projections: what each lineup gains this season, in points.
       season: %{mine: i.my_window.now_points, theirs: i.their_window.now_points},

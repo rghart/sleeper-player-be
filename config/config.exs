@@ -78,6 +78,35 @@ config :sleeper_player_api, :intel_leagues, [1_313_425_233_297_813_504]
 # without a deploy. Set it to pin a specific season.
 # config :sleeper_player_api, :intel_season, "2026"
 
+# The gap distribution of real accepted trades, every 5th percentile
+# (0..100), from priv/calibration/real_trade_gaps.exs: 1,183 two-team trades
+# in 138 dynasty leagues, Jan-Oct 2026, valued on KTC as of their own dates.
+# Re-measure as the trade corpus grows.
+config :sleeper_player_api, SleeperPlayerApi.Intel.TradeFairness,
+  real_trade_quantiles: [
+    0.0,
+    0.0266,
+    0.0528,
+    0.072,
+    0.0956,
+    0.1218,
+    0.1413,
+    0.1654,
+    0.1857,
+    0.211,
+    0.2348,
+    0.2615,
+    0.2896,
+    0.3187,
+    0.3489,
+    0.3806,
+    0.4138,
+    0.4709,
+    0.5203,
+    0.584,
+    0.9707
+  ]
+
 # Which KeepTradeCut value the engine reads: "crowd" (crowdsourced, what KTC
 # shows by default), "trades" (values from real trades) or "blend" (KTC's mix
 # of the two). Blend, because crowdsourcing alone overrates picks against
@@ -164,7 +193,9 @@ config :sleeper_player_api, SleeperPlayerApi.Market.Format,
 # each round, and stops after `max_evaluations_per_partner` - a bound on the
 # work, not on the trade.
 config :sleeper_player_api, SleeperPlayerApi.Intel.TradeSearch,
-  fair_band: 0.12,
+  # 20%, about the median gap of 1,183 real accepted trades (measured
+  # 2026-10-01, see Intel.TradeFairness); 12% admitted only a quarter of them.
+  fair_band: 0.20,
   max_added_share: 0.35,
   candidates_per_side: 8,
   surplus_z: 0.5,

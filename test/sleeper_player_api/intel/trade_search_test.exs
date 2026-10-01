@@ -61,7 +61,8 @@ defmodule SleeperPlayerApi.Intel.TradeSearchTest do
   test "every idea is even on market value, within the band", %{ideas: ideas, context: context} do
     for {_mode, _user, idea} <- all(ideas) do
       gap = abs(idea.get_value - idea.give_value) / max(idea.give_value, idea.get_value)
-      assert gap <= 0.12 + 1.0e-9
+      band = Application.fetch_env!(:sleeper_player_api, TradeSearch)[:fair_band]
+      assert gap <= band + 1.0e-9
 
       # And the numbers are what TradeValue says for the pieces involved.
       give = Enum.map(idea.give, &context.values[&1]) ++ Enum.map(idea.give_picks, & &1.value)
