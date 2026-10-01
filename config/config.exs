@@ -141,6 +141,16 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
       overlap: false
     ],
 
+    # 3:45am Central — Sleeper's season projections for the power rankings'
+    # projection and ADP sources. One ~3MB request. Between the FantasyCalc
+    # refresh at :30 and the draft sweep at 4:00 so it contends with neither.
+    [
+      name: :refresh_projections,
+      schedule: "45 8 * * *",
+      task: {SleeperPlayerApi.Tasks.RefreshProjections, :refresh, []},
+      overlap: false
+    ],
+
     # 4:00am Central — sweep leaguemate drafts. Completed drafts are
     # immutable and never refetched, so a warm run is cheap.
     [

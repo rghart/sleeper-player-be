@@ -114,6 +114,18 @@ defmodule SleeperPlayerApiWeb.FallbackController do
   # Sleeper answered, but not with the shape this endpoint needs. Distinct
   # from a transport failure: retrying will not help, and it is the signal
   # that their API changed under us.
+  # `LeagueRankingController`: no KeepTradeCut values are stored, so there
+  # is no Future score and no ranking. Not a 502 - nothing upstream failed in
+  # this request - but a state the hourly refresh fixes, hence "unavailable".
+  def call(conn, {:error, :no_dynasty_values}) do
+    conn
+    |> put_status(:service_unavailable)
+    |> put_view(json: SleeperPlayerApiWeb.ErrorJSON)
+    |> Phoenix.Controller.json(%{
+      errors: %{detail: "no dynasty values are stored yet, so the league cannot be ranked"}
+    })
+  end
+
   def call(conn, {:error, {:upstream_shape, path}}) do
     conn
     |> put_status(:bad_gateway)

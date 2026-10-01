@@ -42,6 +42,7 @@ defmodule SleeperPlayerApi.Intel do
     PlayerValue,
     PlayerValueHistory,
     DraftPickValue,
+    PlayerProjection,
     DraftParticipant,
     ObservedLeague,
     ObservedRoster,
@@ -329,6 +330,117 @@ defmodule SleeperPlayerApi.Intel do
     )
     |> Repo.all()
     |> Map.new()
+  end
+
+  @doc """
+  The fields a lineup needs, for the ids given and only for active players:
+  `player_id => %{"position", "fantasy_positions", "injury_status"}`.
+
+  Active only, and string-keyed, because this stands in for the frontend's
+  `playerInfo`, which comes from `/api/legacy/players` (active players, every
+  field a string key). A retired player still sitting on a roster is absent
+  there and so can never start; it has to be absent here too, or the server
+  would rank the same league differently from the app.
+  """
+  @spec lineup_players([String.t() | integer]) :: %{String.t() => map}
+  def lineup_players(player_ids) do
+    ids = player_ids |> Enum.map(&to_string/1) |> Enum.uniq()
+
+    from(p in SleeperPlayerApi.Sleeper.Player,
+      where: p.player_id in ^ids and p.active == true,
+      preload: [:position, :fantasy_positions]
+    )
+    |> Repo.all()
+    |> Map.new(fn p ->
+      {p.player_id,
+       %{
+         "position" => p.position && p.position.abbreviation,
+         "fantasy_positions" => Enum.map(p.fantasy_positions, & &1.abbreviation),
+         "injury_status" => p.injury_status
+       }}
+    end)
+  end
+
+  @doc """
+  Replaces `season`'s stored projections with `rows`, Sleeper's projections
+  payload. Upserts every row, then deletes the season's players the payload
+  no longer lists, so the table holds exactly the latest fetch. Rows without
+  a player id or a stat map are skipped. Returns the number upserted.
+  """
+  @spec replace_projections(integer, [map]) :: non_neg_integer
+  def replace_projections(season, rows) do
+    entries =
+      for %{"player_id" => id, "stats" => stats} = row <- rows, id != nil, is_map(stats) do
+        %{
+          season: season,
+          player_id: to_string(id),
+          stats: stats,
+          projected_at: from_millis(row["last_modified"])
+        }
+      end
+
+    Repo.transaction(fn ->
+      {count, _} =
+        insert_all_batched(PlayerProjection, entries,
+          conflict_target: [:season, :player_id],
+          replace: [:stats, :projected_at, :updated_at]
+        )
+
+      ids = Enum.map(entries, & &1.player_id)
+
+      from(p in PlayerProjection, where: p.season == ^season and p.player_id not in ^ids)
+      |> Repo.delete_all()
+
+      count
+    end)
+    |> elem(1)
+  end
+
+  defp from_millis(ms) when is_integer(ms) do
+    case DateTime.from_unix(ms, :millisecond) do
+      {:ok, dt} -> DateTime.truncate(dt, :second)
+      _ -> nil
+    end
+  end
+
+  defp from_millis(_), do: nil
+
+  @doc """
+  `season`'s stored projections in the shape Sleeper sends them, which is the
+  shape `Intel.Projections` reads: `[%{"player_id" => id, "stats" => map}]`.
+
+  Pass `player_ids` to read only those players. A league needs its ~300
+  rostered players, not all ~3,300 rows, and the rankings read nothing else
+  (the parity capture checks that trimming to rostered players changes no
+  answer).
+  """
+  @spec projections(integer, [String.t() | integer] | :all) :: [map]
+  def projections(season, player_ids \\ :all) do
+    query =
+      from(p in PlayerProjection,
+        where: p.season == ^season,
+        order_by: p.player_id,
+        select: %{"player_id" => p.player_id, "stats" => p.stats}
+      )
+
+    case player_ids do
+      :all -> query
+      ids -> where(query, [p], p.player_id in ^Enum.map(ids, &to_string/1))
+    end
+    |> Repo.all()
+  end
+
+  @doc "Whether any projections are stored for `season`."
+  @spec projections_stored?(integer) :: boolean
+  def projections_stored?(season) do
+    Repo.exists?(from(p in PlayerProjection, where: p.season == ^season))
+  end
+
+  @doc "When Sleeper last changed any of `season`'s projections, or nil if none are stored."
+  @spec projections_as_of(integer) :: DateTime.t() | nil
+  def projections_as_of(season) do
+    from(p in PlayerProjection, where: p.season == ^season, select: max(p.projected_at))
+    |> Repo.one()
   end
 
   @doc """
