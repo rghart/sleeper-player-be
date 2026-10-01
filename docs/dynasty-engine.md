@@ -183,8 +183,8 @@ leagues, and the #188 preview rendered correctly against it.
   The first guesses (40% of KTC value, 1,000 KTC, buyer z ≤ 0) flagged no
   contender as aging and listed 210 sells. KTC already discounts age, so
   aging moved to projections: shares ran 6–37%, and 25% flags 5 of 17
-  contenders. Sells at 2,500 / −0.25 list 62 across the five leagues, about
-  one per team with a real buyer. The age cutoffs themselves are still the
+  contenders. Sells at 2,500 / −0.25 list 149 candidates across the five
+  leagues (down from 258), 62 of them with a real buyer: about one per team. The age cutoffs themselves are still the
   spec's; the deferred research pass is where they'd be checked.
 - **Still to do:** move the app's "Starters vs you" bars to `/weaknesses`
   and delete `groupStrength`.
