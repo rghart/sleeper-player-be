@@ -28,6 +28,8 @@ defmodule SleeperPlayerApiWeb.Router do
     get "/leagues/:league_id/intel", IntelController, :show
     get "/leagues/:league_id/trades", TradeController, :index
     get "/leagues/:league_id/rankings", LeagueRankingController, :show
+    get "/leagues/:league_id/weaknesses", LeagueWeaknessController, :show
+    get "/leagues/:league_id/sells", LeagueSellController, :show
     get "/users/:user_id/activity", ManagerActivityController, :show
   end
 
