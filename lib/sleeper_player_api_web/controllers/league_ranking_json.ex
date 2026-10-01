@@ -10,7 +10,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
   values - so a caller can hedge without guessing.
   """
 
-  alias SleeperPlayerApi.Intel.{MarketSettings, PowerRankings}
+  alias SleeperPlayerApi.Intel.{Aging, MarketSettings, PowerRankings}
 
   def show(%{league: league, settings: settings, teams: teams} = assigns) do
     now_rank = PowerRankings.ranks_by(teams, & &1.now.blend)
@@ -31,7 +31,9 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
       thresholds: thresholds(),
       teams:
         Enum.map(teams, fn team ->
-          team(team, %{now: now_rank[team.roster_id], future: future_rank[team.roster_id]})
+          team
+          |> team(%{now: now_rank[team.roster_id], future: future_rank[team.roster_id]})
+          |> Map.put(:window, window(team, assigns[:player_info] || %{}))
         end)
     }
   end
@@ -107,6 +109,22 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
       tiers: string_keys(team.tiers),
       lineups: Map.new(team.lineups, fn {id, lineup} -> {to_string(id), lineup(lineup)} end),
       futureDetail: future_detail(team.future_detail)
+    }
+  end
+
+  # The contend/rebuild window is the blended tier (M2 keeps the five tiers
+  # rather than the spec's terciles), plus whether a contender is leaning on
+  # players past their age cliff. `agedShare` is reported for every team, so
+  # a caller can see how close a non-contender is too; `aging` is only
+  # answered for contenders, where the question means something.
+  defp window(team, player_info) do
+    share = Aging.lineup_share(team.lineups[:ktc], player_info)
+
+    %{
+      tier: team.tiers[:blend],
+      aging: Aging.aging?(team.tiers[:blend], share),
+      agedShare: share,
+      agingShareThreshold: Aging.aging_share()
     }
   end
 

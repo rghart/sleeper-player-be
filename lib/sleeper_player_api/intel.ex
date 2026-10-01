@@ -334,7 +334,7 @@ defmodule SleeperPlayerApi.Intel do
 
   @doc """
   The fields a lineup needs, for the ids given and only for active players:
-  `player_id => %{"position", "fantasy_positions", "injury_status"}`.
+  `player_id => %{"position", "fantasy_positions", "injury_status", "age"}`.
 
   Active only, and string-keyed, because this stands in for the frontend's
   `playerInfo`, which comes from `/api/legacy/players` (active players, every
@@ -356,7 +356,9 @@ defmodule SleeperPlayerApi.Intel do
        %{
          "position" => p.position && p.position.abbreviation,
          "fantasy_positions" => Enum.map(p.fantasy_positions, & &1.abbreviation),
-         "injury_status" => p.injury_status
+         "injury_status" => p.injury_status,
+         # Sleeper's whole-year age, for the age-cliff signals in `Intel.Aging`.
+         "age" => p.age
        }}
     end)
   end

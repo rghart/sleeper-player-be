@@ -119,11 +119,13 @@ trades all read the best lineup and the tier.
 5. **Done when** the Elixir output matches the golden JSON. Switching the FE
    panel to the endpoint and deleting the JS copy is a separate follow-up PR.
 
-**Progress, 2026-09-30.** Steps 1–2 shipped in rghart/sleeper-player-be#60,
-steps 3–4 in #61, both deployed. Checked live: the endpoint matches the app's
-own `rankLeague` exactly (z-scores, tiers, net picks) on all five of Ryan's
-dynasty leagues. Warm requests take ~0.35s. **Remaining for M1:** switch the
-app's Power Rankings panel to the endpoint, and delete the JS copy.
+**Done, 2026-09-30.** Server side in rghart/sleeper-player-be#60–#63 (#62
+sends the tier thresholds, #63 counts an undrafted league's projections as
+available), all deployed. The app switched over in rghart/my-sleeper-app#188:
+the panel and the menu tier chips read `/rankings`, and `powerRankings.js`,
+`pickSlots.js` and `projections.js` are gone. Checked live: the endpoint
+matches the app's old `rankLeague` exactly on all five of Ryan's dynasty
+leagues, and the #188 preview rendered correctly against it.
 
 - **Fixtures:** `test/support/fixtures/power_rankings/` holds three leagues
   (`sf_te05_12t`, `qb3_sf_te075_8t`, `qb2_sf_te1_10t`), captured by
@@ -156,17 +158,29 @@ app's Power Rankings panel to the endpoint, and delete the JS copy.
 
 ### M2: Weakness, window, sells
 
-- `Intel.Weakness`: per team and starting position, compare the team's
-  starter value to the league median. Returns ranked deficits and surpluses.
-  Reuse `teamComparison.js`'s position groups as the spec.
-- **Window:** the five existing tiers become the window
-  (contender / all-in / middle / rebuilding / stuck). This replaces HANDOFF's
-  terciles. Add an **aging** flag from the value-weighted age of starters.
-- `Intel.SellSignals`: for middle, rebuilding and stuck teams, list players
-  past a per-position age cutoff (config; start with RB 26, WR 29, TE 30,
-  QB 33). Pair each with the contenders whose weakness is that position.
-- Endpoints: `/leagues/:id/weaknesses`, `/leagues/:id/sells`. Alternatively
-  fold these into `/rankings` as optional sections, to be decided in review.
+**Built, 2026-10-01** (decisions from the open questions, as recommended):
+
+- **One loader, separate endpoints.** `Intel.LeagueSnapshot` reads Sleeper
+  and the stored values once, ranks, and caches the result for 60s
+  (`LeagueSnapshotCache`). `/rankings`, `/weaknesses` and `/sells` all start
+  from it, so an agent calling all three costs one set of Sleeper reads.
+- **Weakness:** `Intel.Weakness` ports the app's `groupStrength` (the
+  "Starters vs you" bars), pinned to the JS output on the three fixtures
+  (`group_strength.mjs`). `GET /api/v1/leagues/:id/weaknesses` returns per
+  team: each position group's blended z, z per source, and KTC value against
+  the league median, plus `deficits` and `surpluses` at |z| ≥ 0.5 (config).
+- **Window:** the five tiers, not terciles. Each team in `/rankings` gains a
+  `window`: tier, `agedShare` (share of KTC starting value past the age
+  cliff), and `aging` (contenders only, true at ≥ 40%, config).
+- **Sells:** `Intel.SellSignals` handles Middle, Rebuilding and Stuck
+  teams. A candidate is a rostered player at or past his position's cutoff
+  (RB 26, WR 29, TE 30, QB 33) worth ≥ 1,000 KTC. Each candidate is paired
+  with the contenders whose lineup is below average (z ≤ 0) at his group or
+  at FLEX, neediest first. `GET /api/v1/leagues/:id/sells` returns the rules
+  it used beside the list.
+- **Still to do:** tune the cutoffs, 40% and 1,000 against real leagues.
+  Move the app's "Starters vs you" bars to `/weaknesses` and delete
+  `groupStrength`.
 
 ### M3: ADP from real drafts
 
@@ -260,9 +274,9 @@ defaults and model features.
 
 ## Open questions
 
-1. **M2 endpoints:** separate endpoints, or optional sections of `/rankings`?
+1. ~~**M2 endpoints:**~~ Decided: separate endpoints over one cached snapshot.
 2. **M3 snowball crawl:** how wide may it grow per night? This is a
    rate-limit and Postgres-size budget, sized from the VM headroom check in
    Cost.
-3. **Aging flag:** value-weighted starter age, or share of starter value
-   held by players past their position's cutoff?
+3. ~~**Aging flag:**~~ Decided: share of KTC starting value past the
+   position cutoffs, flagged at 40% on contenders.

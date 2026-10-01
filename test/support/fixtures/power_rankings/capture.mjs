@@ -16,7 +16,10 @@
 // files stay small. Trimming must not change the answer, so the script ranks
 // both the full and the trimmed inputs and refuses to write if they differ.
 //
-// Run from the repo root, pointing at a my-sleeper-app checkout:
+// The frontend's `rankLeague` was deleted once the app read these rankings
+// from the backend (rghart/my-sleeper-app#188), so recapturing needs a
+// my-sleeper-app checkout from before that, e.g. `git worktree add
+// /tmp/fe aa57869`. Run from the repo root, pointing at it:
 //
 //     node test/support/fixtures/power_rankings/capture.mjs ~/src/my-sleeper-app <label>=<league_id>...
 //

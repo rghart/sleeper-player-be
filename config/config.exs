@@ -94,6 +94,26 @@ config :sleeper_player_api, SleeperPlayerApi.Intel.PowerRankings,
   },
   adp_ceiling: 300
 
+# Dynasty signals (docs/dynasty-engine.md, M2). Starting values from the
+# spec, to be tuned against real leagues the way the tier lines were.
+#
+# Weakness: how far from the league average, in z, a position group must be
+# to count as a deficit or surplus.
+config :sleeper_player_api, SleeperPlayerApi.Intel.Weakness, threshold: 0.5
+
+# Aging: the age at which each position is past its cliff (a sell candidate
+# on a team that is not contending), and the share of a contender's
+# KeepTradeCut starting value past it that flags the team as aging.
+config :sleeper_player_api, SleeperPlayerApi.Intel.Aging,
+  cutoffs: %{"QB" => 33, "RB" => 26, "WR" => 29, "TE" => 30},
+  aging_share: 0.4
+
+# Sells: the least KeepTradeCut value worth listing, and how strong a
+# contender's group may be (z) and still count as a buyer there.
+config :sleeper_player_api, SleeperPlayerApi.Intel.SellSignals,
+  min_value: 1000,
+  buyer_max_z: 0
+
 # Quantum cron jobs. Times are UTC; Central is UTC-5.
 #
 # Ordering matters: the player dump runs first because the intel crawler

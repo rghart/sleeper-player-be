@@ -4,7 +4,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
   use SleeperPlayerApiWeb.ConnCase, async: false
 
   alias SleeperPlayerApi.Intel
-  alias SleeperPlayerApi.Intel.MarketValuesCache
+  alias SleeperPlayerApi.Intel.{LeagueSnapshotCache, MarketValuesCache}
   alias SleeperPlayerApi.Repo
   alias SleeperPlayerApi.Sleeper.{FantasyPositions, Player, Position}
 
@@ -33,6 +33,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
     end
 
     MarketValuesCache.clear()
+    LeagueSnapshotCache.clear()
 
     on_exit(fn ->
       for key <- [:sleeper_base_url, :sleeper_projections_base_url, :fantasy_calc_base_url] do
@@ -40,6 +41,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
       end
 
       MarketValuesCache.clear()
+      LeagueSnapshotCache.clear()
     end)
 
     {:ok, sleeper: sleeper, projections: projections, fantasy_calc: fantasy_calc}
@@ -66,7 +68,8 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
         search_full_name: "p #{player_id}",
         position_id: pos.id,
         active: Keyword.get(opts, :active, true),
-        injury_status: Keyword.get(opts, :injury_status)
+        injury_status: Keyword.get(opts, :injury_status),
+        age: Keyword.get(opts, :age)
       })
 
     Repo.insert!(%FantasyPositions{player_id: player.id, position_id: pos.id})
@@ -290,6 +293,89 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
     assert body["missing"] == []
     assert "projections" in Enum.map(body["sources"], & &1["id"])
     assert team(body, 1)["now"]["proj"] == 0
+  end
+
+  describe "M2: windows, weaknesses and sells" do
+    setup %{sleeper: sleeper, projections: projections} do
+      # Team 3's running back is 28, past the RB cliff of 26; everyone else
+      # is young.
+      for {roster, players} <- @teams, {pos, id} <- players do
+        seed_player(id, pos, age: if(roster == 3 and pos == "RB", do: 28, else: 23))
+      end
+
+      seed_values(["keeptradecut:sf", "fantasycalc"])
+      stub_sleeper(sleeper)
+      stub_projections(projections)
+      :ok
+    end
+
+    test "/rankings gives every team its window, with the aged share of its lineup", %{conn: conn} do
+      body = conn |> get(~p"/api/v1/leagues/#{@league}/rankings") |> json_response(200)
+
+      strong = team(body, 1)["window"]
+      assert strong["tier"] == team(body, 1)["tier"]
+      assert strong["agedShare"] == 0
+      assert strong["aging"] == false
+      assert strong["agingShareThreshold"] == 0.4
+
+      # A quarter of team 3's lineup value is its 28-year-old RB, but it is
+      # not contending, so "aging" is not answered for it.
+      weak = team(body, 3)["window"]
+      assert weak["agedShare"] == 0.25
+      assert weak["aging"] == nil
+    end
+
+    test "/weaknesses lists each team's groups against the league", %{conn: conn} do
+      body = conn |> get(~p"/api/v1/leagues/#{@league}/weaknesses") |> json_response(200)
+
+      assert body["threshold"] == 0.5
+      assert Enum.map(body["sources"], & &1["id"]) == ~w(ktc fc projections)
+
+      strong = team(body, 1)
+      assert Enum.map(strong["groups"], & &1["group"]) == ~w(QB RB WR TE FLEX)
+      assert "QB" in strong["surpluses"]
+      assert team(body, 3)["deficits"] |> Enum.member?("QB")
+
+      qb = Enum.find(strong["groups"], &(&1["group"] == "QB"))
+      assert qb["ktcValue"] == 9000.0
+      assert qb["leagueMedianKtc"] == 6000.0
+      assert qb["bySource"] |> Map.keys() |> Enum.sort() == ~w(adp fc ktc proj)
+    end
+
+    test "/sells lists a non-contender's player past his cliff, with the rules it used", %{
+      conn: conn
+    } do
+      body = conn |> get(~p"/api/v1/leagues/#{@league}/sells") |> json_response(200)
+
+      assert body["rules"]["ageCutoffs"]["RB"] == 26
+      assert body["rules"]["minValue"] == 1000
+
+      # Only teams that are not contending are listed.
+      refute Enum.any?(body["teams"], &(&1["tier"] in ["contender", "all-in"]))
+
+      assert %{
+               "candidates" => [
+                 %{"playerId" => "302", "age" => 28, "cutoff" => 26, "value" => 3000.0}
+               ]
+             } =
+               team(body, 3)
+    end
+
+    test "three endpoints in a row read Sleeper once", %{conn: conn, sleeper: sleeper} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(sleeper, "GET", "/league/#{@league}", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Plug.Conn.resp(conn, 200, Jason.encode!(league(%{})))
+      end)
+
+      for path <- ~w(rankings weaknesses sells) do
+        build_conn() |> get("/api/v1/leagues/#{@league}/#{path}") |> json_response(200)
+      end
+
+      assert Agent.get(counter, & &1) == 1
+      _ = conn
+    end
   end
 
   test "leaves picks out, and says so, when traded picks cannot be read", %{
