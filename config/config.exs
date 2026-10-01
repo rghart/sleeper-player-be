@@ -78,6 +78,14 @@ config :sleeper_player_api, :intel_leagues, [1_313_425_233_297_813_504]
 # without a deploy. Set it to pin a specific season.
 # config :sleeper_player_api, :intel_season, "2026"
 
+# Which KeepTradeCut value the engine reads: "crowd" (crowdsourced, what KTC
+# shows by default), "trades" (values from real trades) or "blend" (KTC's mix
+# of the two). Blend, because crowdsourcing alone overrates picks against
+# what they fetch in real trades: a 2027 early 1st was 7,089 crowdsourced and
+# 5,895 from trades on 2026-10-01. The app's Movers and rank list keep reading
+# the crowdsourced list, which is also the only one with history.
+config :sleeper_player_api, :ktc_basis, "blend"
+
 # Power rankings (docs/dynasty-engine.md, M1). Tier lines are z-scores
 # against the league average; `adp_ceiling` is the ADP depth that still
 # counts. These are the values the frontend shipped with, and the parity

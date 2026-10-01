@@ -431,4 +431,101 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCutTest do
       assert sources == ["keeptradecut:1qb", "keeptradecut:sf"]
     end
   end
+
+  describe "value bases" do
+    # Gibbs as the live payload has him: crowdsourced, trade-based and
+    # blended values side by side, in both formats, and a pick likewise.
+    defp with_bases(player, sf, oq) do
+      player
+      |> put_in(["superflexValues"], Map.merge(player["superflexValues"], sf))
+      |> put_in(["oneQBValues"], Map.merge(player["oneQBValues"], oq))
+    end
+
+    defp players_with_bases do
+      [gibbs, flowers, pick] = @players
+
+      [
+        with_bases(
+          gibbs,
+          %{"vftValue" => 9500, "vftRank" => 2, "blendValue" => 9748, "blendRank" => 1},
+          %{"vftValue" => 9600, "blendValue" => 9800}
+        ),
+        flowers,
+        with_bases(pick, %{"vftValue" => 5895, "blendValue" => 6492}, %{
+          "vftValue" => 6000,
+          "blendValue" => 6600
+        })
+      ]
+    end
+
+    test "stores each basis KTC sends, crowdsourced under the plain name", %{bypass: bypass} do
+      stub(bypass, players_with_bases())
+
+      assert {:ok, entries} = KeepTradeCut.fetch_values()
+
+      gibbs = entries |> Enum.filter(&(&1.player_id == 9509)) |> Map.new(&{&1.source, &1.value})
+
+      assert gibbs == %{
+               "keeptradecut:sf" => 9997.0,
+               "keeptradecut:sf:trades" => 9500.0,
+               "keeptradecut:sf:blend" => 9748.0,
+               "keeptradecut:1qb" => 9999.0,
+               "keeptradecut:1qb:trades" => 9600.0,
+               "keeptradecut:1qb:blend" => 9800.0
+             }
+
+      # A player whose payload has no trade-based figure gets no row for it.
+      flowers = entries |> Enum.filter(&(&1.player_id == 9500)) |> Enum.map(& &1.source)
+      assert Enum.sort(flowers) == ["keeptradecut:1qb", "keeptradecut:sf"]
+    end
+
+    test "prices picks on each basis too", %{bypass: _bypass} do
+      picks = KeepTradeCut.pick_entries(players_with_bases(), DateTime.utc_now())
+
+      assert picks |> Enum.map(&{&1.source, &1.value}) |> Enum.sort() == [
+               {"keeptradecut:1qb", 7357.0},
+               {"keeptradecut:1qb:blend", 6600.0},
+               {"keeptradecut:1qb:trades", 6000.0},
+               {"keeptradecut:sf", 7080.0},
+               {"keeptradecut:sf:blend", 6492.0},
+               {"keeptradecut:sf:trades", 5895.0}
+             ]
+    end
+
+    test "keeps every basis but crowdsourced out of the history", %{bypass: bypass} do
+      stub(bypass, players_with_bases())
+      {:ok, entries} = KeepTradeCut.fetch_values()
+
+      SleeperPlayerApi.Intel.record_value_history(entries)
+
+      sources =
+        SleeperPlayerApi.Repo.all(SleeperPlayerApi.Intel.PlayerValueHistory)
+        |> Enum.map(& &1.source)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert sources == ["keeptradecut:1qb", "keeptradecut:sf"]
+    end
+
+    test "the engine reads the configured basis once it is stored, crowdsourced until then" do
+      alias SleeperPlayerApi.Intel
+
+      assert Intel.ktc_source("keeptradecut:sf") == "keeptradecut:sf"
+
+      Intel.upsert_player_values([
+        %{
+          player_id: 9509,
+          source: "keeptradecut:sf:blend",
+          value: 9748.0,
+          overall_rank: 1,
+          position_rank: 1,
+          as_of: DateTime.utc_now() |> DateTime.truncate(:second)
+        }
+      ])
+
+      assert Intel.ktc_source("keeptradecut:sf") == "keeptradecut:sf:blend"
+      # The other format has no blend yet, so it stays crowdsourced.
+      assert Intel.ktc_source("keeptradecut:1qb") == "keeptradecut:1qb"
+    end
+  end
 end

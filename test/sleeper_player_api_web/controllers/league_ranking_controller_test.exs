@@ -320,6 +320,22 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
                "TE+ tier"
     end
 
+    test "prices on KTC's blended value once it is stored", %{conn: conn, sleeper: sleeper} do
+      # Every player stored on the blend too, team 1's QB valued differently.
+      for {roster_id, players} <- @teams, {_pos, id} <- players do
+        value = if id == "101", do: 1.0, else: @strength[roster_id]
+        Intel.upsert_player_values([value_row(id, "keeptradecut:sf:blend", value)])
+      end
+
+      stub_sleeper(sleeper)
+
+      body = conn |> get(~p"/api/v1/leagues/#{@league}/rankings") |> json_response(200)
+
+      assert hd(body["sources"])["provider"] == "keeptradecut:sf:blend"
+      qb = team(body, 1)["lineups"]["ktc"]["starters"] |> Enum.find(&(&1["slot"] == "QB"))
+      assert qb["value"] == 1.0
+    end
+
     test "a league without one keeps the base list", %{conn: conn, sleeper: sleeper} do
       stub_sleeper(sleeper)
 
