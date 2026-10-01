@@ -146,6 +146,26 @@ config :sleeper_player_api, SleeperPlayerApi.Market.Format,
   min_teams: 8,
   window_days: 365
 
+# Trade ideas (docs/dynasty-engine.md, M4). Every idea is even on market
+# value (KTC, package-adjusted) within `fair_band`. An uneven package is
+# evened by the side ahead adding picks or bench players, as many as it takes,
+# worth no more than `max_added_share` of the larger side. Candidates are
+# players who don't start, or start in a group at z >= `surplus_z`, asked for
+# where the asking team is at z <= `need_z`. Trades have no size limit: a beam
+# search grows packages one player at a time, keeping the best `beam_width`
+# each round, and stops after `max_evaluations_per_partner` - a bound on the
+# work, not on the trade.
+config :sleeper_player_api, SleeperPlayerApi.Intel.TradeSearch,
+  fair_band: 0.12,
+  max_added_share: 0.35,
+  candidates_per_side: 8,
+  surplus_z: 0.5,
+  need_z: -0.25,
+  beam_width: 12,
+  max_evaluations_per_partner: 400,
+  per_partner: 3,
+  limit: 15
+
 # Quantum cron jobs. Times are UTC; Central is UTC-5.
 #
 # Ordering matters: the player dump runs first because the intel crawler

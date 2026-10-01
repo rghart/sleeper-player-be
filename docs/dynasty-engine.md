@@ -327,9 +327,35 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
   can't, it still suggests, ordered by fit. Fairness and fit remain the
   gates. The snapshot now checks KTC straight after the league and stops
   before any other reads.
-- **Step 2 (next):** the trade shape windows make possible: a rebuilder's
-  aging starter for a contender's picks (the M2 sell list, priced into
-  offers).
+- **Trade ideas v2, 2026-10-01** (rghart/sleeper-player-be#76):
+  `GET /api/v1/leagues/:id/trade-ideas?user_id=&mode=`, alongside the old
+  `/trades`. Decisions from Ryan:
+  - Every trade is **even on market value**: KTC on the league's TE tier,
+    package-adjusted, within 12%.
+  - Projections only steer **what is suggested**, by mode: `window` (both
+    sides gain in their own window), `win_now` (your lineup improves, theirs
+    doesn't lose in its window), `market` (you come out ahead on value,
+    they don't lose in their window).
+  - An uneven package is evened by the side ahead adding picks or bench
+    players, whatever its window, with no piece limit, only a value cap of
+    35% of the larger side.
+  - **No trade size limit:** a beam search grows packages from every
+    1-for-1, bounded by work (beam 12, 400 evaluations per partner).
+  - Surplus and need come from position strength, not counts, and starters
+    are candidates.
+  - A side that ends up over its roster limit cuts its lowest bench players,
+    and those cuts count against it.
+
+  On the League of Boredom fixture each mode answers in 216–343 ms with
+  shapes from 1-for-1 to 3-for-3 plus picks.
+- **Real trades, next:**
+  1. KTC's trade-based (`vftValue`) and blended values as a configurable
+     basis.
+  2. Calibrate the fairness band from the 1,540 real trades already in
+     `observed_transactions`.
+  3. A `market_trades` corpus across all league types, with its own crawl
+     budget (transactions are per league per week).
+  4. Comparable trades shown with each idea.
 
 ### M5: `dynasty-agent` (Python), deferred
 
