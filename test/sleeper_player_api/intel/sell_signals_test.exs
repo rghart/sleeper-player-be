@@ -37,8 +37,8 @@ defmodule SleeperPlayerApi.Intel.SellSignalsTest do
     end
 
     test "flags only contenders, at or over the share" do
-      assert Aging.aging?("contender", 0.4)
-      refute Aging.aging?("all-in", 0.39)
+      assert Aging.aging?("contender", Aging.aging_share())
+      refute Aging.aging?("all-in", Aging.aging_share() - 0.01)
       # Not contending: the question does not arise.
       assert Aging.aging?("rebuilding", 0.9) == nil
     end
@@ -114,12 +114,9 @@ defmodule SleeperPlayerApi.Intel.SellSignalsTest do
              %{roster_id: 2, need_group: "FLEX", need_z: -0.6}
            ] = by_id["oldrb"].buyers
 
-    # The WR: team 2 is thinner (its FLEX), team 1 needs no WR but its FLEX
-    # is below average too.
-    assert Enum.map(by_id["oldwr"].buyers, &{&1.roster_id, &1.need_group}) == [
-             {2, "FLEX"},
-             {1, "FLEX"}
-           ]
+    # The WR: team 2 is thin at FLEX. Team 1's FLEX is only a shade below
+    # average (-0.2), which is not a need.
+    assert Enum.map(by_id["oldwr"].buyers, &{&1.roster_id, &1.need_group}) == [{2, "FLEX"}]
   end
 
   test "a contender above average where he would start is not a buyer" do

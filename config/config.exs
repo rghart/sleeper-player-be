@@ -102,17 +102,23 @@ config :sleeper_player_api, SleeperPlayerApi.Intel.PowerRankings,
 config :sleeper_player_api, SleeperPlayerApi.Intel.Weakness, threshold: 0.5
 
 # Aging: the age at which each position is past its cliff (a sell candidate
-# on a team that is not contending), and the share of a contender's
-# KeepTradeCut starting value past it that flags the team as aging.
+# on a team that is not contending), and the share of a contender's projected
+# starting points past it that flags the team as aging. 25% measured
+# 2026-10-01 on Ryan's five leagues: contenders' shares ran 6-37% (median
+# 18%), and 25% flags 5 of 17. It was 40% against KTC value, which flagged
+# nobody, because KTC already discounts age.
 config :sleeper_player_api, SleeperPlayerApi.Intel.Aging,
   cutoffs: %{"QB" => 33, "RB" => 26, "WR" => 29, "TE" => 30},
-  aging_share: 0.4
+  aging_share: 0.25
 
-# Sells: the least KeepTradeCut value worth listing, and how strong a
-# contender's group may be (z) and still count as a buyer there.
+# Sells: the least KeepTradeCut value worth listing, and how weak a
+# contender's group must be (z) to count as a buyer there. Measured
+# 2026-10-01 on the same five leagues: 1,000 and z <= 0 listed 7 a team with
+# "buyers" at a plain-average -0.0; 2,500 and -0.25 lists a median of 4 a
+# team, about 1 of them with a real buyer.
 config :sleeper_player_api, SleeperPlayerApi.Intel.SellSignals,
-  min_value: 1000,
-  buyer_max_z: 0
+  min_value: 2500,
+  buyer_max_z: -0.25
 
 # Quantum cron jobs. Times are UTC; Central is UTC-5.
 #
