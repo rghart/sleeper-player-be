@@ -108,4 +108,38 @@ defmodule SleeperPlayerApi.Market.Format do
 
   @doc "A bucket as the string an API caller names it by, `startup-sf-tep`."
   def bucket_key({kind, qb, tep}), do: "#{kind}-#{qb}-#{tep}"
+
+  @doc "The bucket a key names, or `:error` for one that is not a bucket."
+  def parse_key(key) do
+    case Enum.find(buckets(), &(bucket_key(&1) == key)) do
+      nil -> :error
+      bucket -> {:ok, bucket}
+    end
+  end
+
+  @doc """
+  Sleeper's ADP column to compare a bucket against, and what it is.
+
+  Sleeper publishes dynasty startup ADP in two variants, superflex
+  (`adp_dynasty_2qb`) and PPR (`adp_dynasty_ppr`), and nothing for TE
+  premium. Its `adp_rookie` column was empty for every player when this was
+  written (checked 2026-10-01), so a rookie bucket is compared against the
+  startup column ranked among the same rookies: the comparison is of order
+  among shared players, so that still asks whether Sleeper orders the class
+  the way real rookie drafts do.
+  """
+  def sleeper_column({kind, qb, tep}) do
+    column = if qb == "sf", do: "adp_dynasty_2qb", else: "adp_dynasty_ppr"
+
+    notes =
+      [
+        kind == "rookie" &&
+          "Sleeper's rookie ADP is empty, so this is its startup ADP ranked among these rookies.",
+        tep == "tep" &&
+          "Sleeper has no TE-premium ADP; this compares against its non-premium column."
+      ]
+      |> Enum.filter(& &1)
+
+    %{column: column, notes: notes}
+  end
 end
