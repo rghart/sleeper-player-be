@@ -228,6 +228,32 @@ weeks), with ADP weight decaying by week. The weights go in config.
 Optional, low priority: Fantasy Football Calculator's public redraft ADP
 (`/api/v1/adp/{format}?teams=&year=`) as a cross-check.
 
+**Corpus built, 2026-10-01** (rghart/sleeper-player-be#67):
+
+- **A separate market corpus**, not `observed_drafts`. About 15 leaguemate-intel
+  and availability queries read that table assuming every row is a
+  leaguemate's rookie draft, and the availability model is calibrated
+  against it. New tables: `market_users` (the frontier), `market_leagues`,
+  `market_drafts` (with format), and `market_picks`.
+- **Buckets** are `{kind, qb, tep}`: rookie or startup, 1QB or superflex
+  (QB slots + superflex ≥ 2), TE premium or not. Eight in all. Team count and
+  PPR are recorded but not split on.
+- **Rules** (`Market.Format`, config): complete, `dynasty*` scoring, a
+  dynasty league (type 2), ≥ 8 teams, started in the last 365 days. A
+  rookie draft is player_type 1; a startup is player_type 0 with ≥ 15 rounds.
+  A draft whose picks don't fill every slot is stored but not counted.
+- **Crawl** (`Tasks.CrawlMarketDrafts`, 5:15am Central): seeds from the
+  leaguemate users and snowballs through each qualifying draft's league.
+  It stops at 1,500 calls, skips full buckets (150), and revisits a user
+  after 30 days. Each draft is stored as it's fetched, so memory stays flat.
+- **Measured locally against live Sleeper**, seeded from Ryan alone: 300
+  calls in 19s stored 95 complete drafts (6,058 picks) and found 709
+  users. 80 drafts were superflex rookie, 11 1QB rookie, and 5 startups.
+  Startups are scarce (one per league), so the startup buckets will fill
+  over weeks, not nights.
+- **Next:** ADP per bucket (mean, median, spread, n, how often drafted) and
+  the comparison with Sleeper's ADP columns, once a few nights of data are in.
+
 ### M4: Summary and window-aware trades
 
 - `GET /api/v1/users/:username/summary`: every dynasty league the user is in,
