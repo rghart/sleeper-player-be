@@ -24,6 +24,9 @@ defmodule SleeperPlayerApiWeb.AdpJSON do
       bucket: Format.bucket_key(assigns.bucket),
       since: assigns.since,
       drafts: assigns.drafts,
+      # Drafts in the bucket left out as not what they claim to be (a
+      # "rookie" draft that was mostly veterans).
+      excludedDrafts: assigns.excluded_drafts,
       # Players with an ADP in all, before `limit` cut the list.
       players: assigns.total_players,
       minDrafts: Adp.min_drafts(),

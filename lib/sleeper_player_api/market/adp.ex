@@ -33,6 +33,75 @@ defmodule SleeperPlayerApi.Market.Adp do
   @doc "The fewest drafts a player must go in to get an ADP, from config."
   def min_drafts, do: config(:min_drafts, 5)
 
+  @doc "The least share of a rookie draft's picks that must be rookies, from config."
+  def rookie_min_share, do: config(:rookie_min_share, 0.5)
+
+  # Positions whose draft spot says more about a league's lineup than about
+  # the market: a league that starts a kicker drafts one, one that does not
+  # never will. They keep their ADP, where `rate` shows how few drafts take
+  # them, but are left out of the comparison with Sleeper.
+  @league_dependent ["K", "DEF"]
+
+  @doc """
+  Drops "rookie" drafts that are not rookie drafts, as `{kept, dropped}`.
+
+  Sleeper's `player_type` marks a draft rookies-only, but some leagues run a
+  veteran supplemental draft under that flag. Found on the first production
+  corpus: one 10-round "rookie" draft took Pat Freiermuth and a 14-year
+  kicker ahead of the top rookie, and that one draft moved every top
+  rookie's mean pick by about half a place. A draft counts when at least
+  `rookie_min_share/0` of its picks were rookies in the draft's season.
+
+  `years_exp` is `%{player_id => years_exp}` as of `current_season`; a rookie
+  of season S has `current_season - S` years. A pick whose player is not in
+  the map is not counted either way.
+  """
+  def rookie_drafts_only(drafts, years_exp, current_season) do
+    min_share = rookie_min_share()
+
+    Enum.split_with(drafts, fn draft ->
+      known = rookie_flags(draft, years_exp, current_season)
+      known == [] or Enum.count(known, & &1) / length(known) >= min_share
+    end)
+  end
+
+  # Whether each pick whose player is known was a rookie in the draft's
+  # season. Empty, and so kept, when the season cannot be read.
+  defp rookie_flags(draft, years_exp, current_season) do
+    case to_season(draft[:season]) do
+      nil ->
+        []
+
+      season ->
+        rookie_exp = current_season - season
+
+        Enum.flat_map(draft.picks, fn pick ->
+          case years_exp[pick.player_id] do
+            nil -> []
+            exp -> [exp == rookie_exp]
+          end
+        end)
+    end
+  end
+
+  defp to_season(season) when is_integer(season), do: season
+
+  defp to_season(season) when is_binary(season) do
+    case Integer.parse(season) do
+      {year, ""} -> year
+      _ -> nil
+    end
+  end
+
+  defp to_season(_), do: nil
+
+  @doc """
+  `players` without the league-dependent positions (K, DEF), for comparing
+  with Sleeper. `positions` is `%{player_id => position}`.
+  """
+  def comparable(players, positions),
+    do: Enum.reject(players, &(positions[&1.player_id] in @league_dependent))
+
   @doc """
   ADP for one bucket. `drafts` is a list of `%{id, picks: [%{pick_no,
   player_id}]}`. Returns players sorted by ADP, earliest first, each

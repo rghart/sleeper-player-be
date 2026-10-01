@@ -28,23 +28,38 @@ defmodule SleeperPlayerApiWeb.AdpController do
     with {:ok, bucket} <- parse_bucket(key),
          {:ok, limit} <- parse_limit(params["limit"]) do
       since = Format.window_start()
-      drafts = Market.bucket_drafts(bucket, since)
+      {drafts, excluded} = bucket_drafts(bucket, since)
       players = Adp.compute(drafts)
       column = Format.sleeper_column(bucket)
       sleeper = sleeper_adp(column.column)
+      positions = Intel.player_positions(Enum.map(players, & &1.player_id))
 
       render(conn, :show,
         bucket: bucket,
         since: since,
         drafts: length(drafts),
+        excluded_drafts: excluded,
         players: Enum.take(players, limit),
         total_players: length(players),
         sleeper: sleeper,
         column: column,
-        comparison: Adp.compare(players, sleeper)
+        comparison: players |> Adp.comparable(positions) |> Adp.compare(sleeper)
       )
     end
   end
+
+  # A rookie bucket keeps only drafts that really were rookie drafts; see
+  # `Adp.rookie_drafts_only/3`. Returns the drafts and how many were dropped.
+  defp bucket_drafts({"rookie", _, _} = bucket, since) do
+    drafts = Market.bucket_drafts(bucket, since)
+    ids = drafts |> Enum.flat_map(& &1.picks) |> Enum.map(& &1.player_id)
+    season = Intel.latest_projections_season() || Date.utc_today().year
+
+    {kept, dropped} = Adp.rookie_drafts_only(drafts, Intel.player_years_exp(ids), season)
+    {kept, length(dropped)}
+  end
+
+  defp bucket_drafts(bucket, since), do: {Market.bucket_drafts(bucket, since), 0}
 
   # Sleeper's ADP column from the latest stored season's projections, as
   # `%{player_id => adp}`. Sleeper writes 999 for "no ADP".
