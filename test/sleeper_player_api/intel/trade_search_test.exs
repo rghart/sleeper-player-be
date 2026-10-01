@@ -132,6 +132,35 @@ defmodule SleeperPlayerApi.Intel.TradeSearchTest do
     end
   end
 
+  test "a strong team with no outright hole still gets ideas", %{context: context, ideas: ideas} do
+    # Regression: asking only at positions below the need line gave a team
+    # whose every group was near average or better nothing at all. Live, that
+    # was the League of Boredom contender (1008 here: TE +1.97, FLEX +1.57,
+    # QB -0.14, RB -0.02), with zero ideas in every mode.
+    no_hole =
+      for {user, team} <- context.teams,
+          Enum.all?(team.groups, fn {_group, z} -> z > -0.25 end),
+          do: user
+
+    assert "1008" in no_hole
+
+    for user <- no_hole, mode <- TradeSearch.modes() do
+      assert ideas[{mode, user}] != [], "#{user} has no #{mode} ideas"
+    end
+  end
+
+  test "finds a tight end for a running back where the TE surplus is", %{
+    context: context,
+    ideas: ideas
+  } do
+    # The trade Ryan expected: deep at TE, average at RB, so a TE goes out
+    # and an RB comes in.
+    assert Enum.any?(ideas[{"window", "1008"}], fn idea ->
+             Enum.any?(idea.give, &(context.positions[&1] == "TE")) and
+               Enum.any?(idea.get, &(context.positions[&1] == "RB"))
+           end)
+  end
+
   test "rejects an unknown mode and a manager not in the league", %{context: context} do
     assert TradeSearch.ideas(context, "1001", "vibes") == {:error, {:invalid_mode, "vibes"}}
     assert TradeSearch.ideas(context, "nobody", "window") == {:error, :not_in_league}

@@ -185,7 +185,8 @@ defmodule SleeperPlayerApi.Intel.PowerRankings do
     end
   end
 
-  defp eligible_for(slot), do: Map.get(@slot_eligibility, slot, [slot])
+  @doc "The positions that may fill a lineup slot."
+  def eligible_for(slot), do: Map.get(@slot_eligibility, slot, [slot])
 
   @doc """
   Population z-scores. A league where every team scores the same has no
