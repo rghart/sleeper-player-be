@@ -34,7 +34,7 @@ defmodule SleeperPlayerApi.Market.Adp do
   def min_drafts, do: config(:min_drafts, 5)
 
   @doc "The least share of a rookie draft's picks that must be rookies, from config."
-  def rookie_min_share, do: config(:rookie_min_share, 0.5)
+  def rookie_min_share, do: config(:rookie_min_share, 0.75)
 
   # Positions whose draft spot says more about a league's lineup than about
   # the market: a league that starts a kicker drafts one, one that does not

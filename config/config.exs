@@ -134,10 +134,12 @@ config :sleeper_player_api, SleeperPlayerApi.Tasks.CrawlMarketDrafts,
 # ADP: the fewest drafts a player must go in to get one (an average over two
 # picks is an anecdote), and the share of a "rookie" draft's picks that must
 # be rookies for it to count (Sleeper's rookie flag also covers some veteran
-# supplemental drafts).
+# supplemental drafts). 0.75 measured 2026-10-01 on 269 production rookie
+# drafts: 266 were 90%+ rookies, 1 was 80-90%, and the 2 veteran drafts were
+# exactly 50% - which a 0.5 line let through.
 config :sleeper_player_api, SleeperPlayerApi.Market.Adp,
   min_drafts: 5,
-  rookie_min_share: 0.5
+  rookie_min_share: 0.75
 
 config :sleeper_player_api, SleeperPlayerApi.Market.Format,
   startup_min_rounds: 15,
