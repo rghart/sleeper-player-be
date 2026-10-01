@@ -25,6 +25,10 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
       sources: Enum.map(assigns.sources, &source/1),
       missing: assigns.missing,
       tiers: PowerRankings.tiers(),
+      # The lines the tiers are cut at, in z-scores, so a chart can draw them
+      # where they really are instead of keeping its own copy that drifts the
+      # first time config changes.
+      thresholds: thresholds(),
       teams:
         Enum.map(teams, fn team ->
           team(team, %{now: now_rank[team.roster_id], future: future_rank[team.roster_id]})
@@ -73,6 +77,18 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
         }
     ]
     |> Enum.filter(& &1)
+  end
+
+  defp thresholds do
+    t = PowerRankings.thresholds()
+
+    %{
+      strongNow: t.strong_now,
+      weakNow: t.weak_now,
+      allInFuture: t.all_in_future,
+      rebuildingFuture: t.rebuilding_future,
+      rebuildingPicks: t.rebuilding_picks
+    }
   end
 
   defp source(%{id: id, provider: provider, as_of: as_of}),
