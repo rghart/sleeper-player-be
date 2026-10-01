@@ -37,13 +37,14 @@ defmodule SleeperPlayerApi.Intel.TradeSearch do
   **Candidates are chosen by quality, not counts.** You offer players who
   do not start for you, or who start in a group where you are strong
   (`Weakness`): a third tight end playing flex is a surplus even though
-  five tight ends is an average count. You ask for their players at the
-  positions where you are thin, on the same terms from their side.
+  five tight ends is an average count. You ask for their spare players who
+  are at a position where you are thin, or who would start for you over
+  your weakest starter in a slot they can fill.
 
   Pure. The controller builds `context/4` from a `LeagueSnapshot`.
   """
 
-  alias SleeperPlayerApi.Intel.{TradeValue, TradeWindow, Weakness}
+  alias SleeperPlayerApi.Intel.{PowerRankings, TradeValue, TradeWindow, Weakness}
 
   @modes ~w(window win_now market)
   @flex_positions ["RB", "WR", "TE"]
@@ -93,6 +94,9 @@ defmodule SleeperPlayerApi.Intel.TradeSearch do
            groups: groups,
            # Slot each player starts in under the win-now lineup, if any.
            starting: Map.new(now_lineup, &{&1.player_id, &1.slot}),
+           # The win-now lineup itself, slot and value, to tell whether an
+           # incoming player would start.
+           lineup: now_lineup,
            picks:
              Enum.map(team.future_detail.picks, &Map.take(&1, [:season, :round, :value, :tier]))
          }}
@@ -107,6 +111,7 @@ defmodule SleeperPlayerApi.Intel.TradeSearch do
       # Taxi and reserve are separate in Sleeper and do not count.
       capacity: length(snapshot.league["roster_positions"] || []),
       positions: Map.new(snapshot.player_info, fn {id, info} -> {id, info["position"]} end),
+      now_values: window.now_values,
       top_value: values |> Map.values() |> Enum.max(fn -> 0 end),
       window: window
     }
@@ -223,11 +228,29 @@ defmodule SleeperPlayerApi.Intel.TradeSearch do
     |> by_value(context)
   end
 
-  # Their spare players at a position where I am thin.
+  # Their spare players who would help me: at a position where I am thin, or
+  # good enough to start for me over my weakest starter in a slot he can
+  # fill. The second is what lets a strong team with no outright hole - every
+  # group near average or better - still find an upgrade; requiring a hole
+  # gave it nothing at all.
   defp wanted(partner, me, context, s) do
     partner
     |> spare(context, s)
-    |> Enum.filter(&needed?(me, context.positions[&1], s))
+    |> Enum.filter(&(needed?(me, context.positions[&1], s) or would_start?(me, &1, context)))
+  end
+
+  defp would_start?(me, player, context) do
+    position = context.positions[player]
+    value = context.now_values[player] || 0
+
+    me.lineup
+    |> Enum.filter(&(position in PowerRankings.eligible_for(&1.slot)))
+    |> Enum.map(& &1.value)
+    |> Enum.min(fn -> nil end)
+    |> case do
+      nil -> false
+      weakest -> value > weakest
+    end
   end
 
   defp needed?(me, position, s) do
