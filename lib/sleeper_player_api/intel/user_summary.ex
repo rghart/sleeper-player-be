@@ -46,9 +46,19 @@ defmodule SleeperPlayerApi.Intel.UserSummary do
     do: base(league) |> Map.put(:error, reason)
 
   defp league(user_id, %{league: league, result: {:ok, snapshot}}) do
-    case Enum.find(snapshot.rosters, &mine?(&1, user_id)) do
-      nil -> base(league) |> Map.put(:skipped, "you have no roster in this league")
-      roster -> analyze(league, snapshot, roster)
+    cond do
+      # A league that has not run its startup ranks every empty roster the
+      # same, so its tiers and ranks would mean nothing. Judged by the rosters,
+      # not Sleeper's `pre_draft` status: a dynasty league is `pre_draft`
+      # before every rookie draft, with full rosters.
+      Enum.all?(snapshot.rosters, &((&1["players"] || []) == [])) ->
+        base(league) |> Map.put(:skipped, "no players rostered yet: the league has not drafted")
+
+      roster = Enum.find(snapshot.rosters, &mine?(&1, user_id)) ->
+        analyze(league, snapshot, roster)
+
+      true ->
+        base(league) |> Map.put(:skipped, "you have no roster in this league")
     end
   end
 

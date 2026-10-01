@@ -133,7 +133,9 @@ defmodule SleeperPlayerApiWeb.UserSummaryControllerTest do
         {"u1", ~w(401 500 403 404)}
       ]),
       league("L3", 0, [{"u1", ~w(101)}]),
-      league("L4", 2, [{"x", ~w(201 202 203 204)}, {"y", ~w(301 302 303 304)}])
+      league("L4", 2, [{"x", ~w(201 202 203 204)}, {"y", ~w(301 302 303 304)}]),
+      # Has not drafted: every roster empty, the user's included.
+      league("L5", 2, [{"u1", []}, {"x", []}, {"y", []}])
     ]
   end
 
@@ -182,7 +184,7 @@ defmodule SleeperPlayerApiWeb.UserSummaryControllerTest do
 
     assert body["user"]["userId"] == "u1"
     assert body["season"] == "2026"
-    assert Enum.map(body["leagues"], & &1["leagueId"]) == ~w(L1 L2 L3 L4)
+    assert Enum.map(body["leagues"], & &1["leagueId"]) == ~w(L1 L2 L3 L4 L5)
 
     contender = leagues["L1"]
     assert contender["tier"] == "contender"
@@ -199,6 +201,8 @@ defmodule SleeperPlayerApiWeb.UserSummaryControllerTest do
 
     assert leagues["L3"]["skipped"] =~ "redraft"
     assert leagues["L4"]["skipped"] =~ "no roster"
+    assert leagues["L5"]["skipped"] =~ "has not drafted"
+    refute Map.has_key?(leagues["L5"], "tier")
   end
 
   test "names a player to sell in one league and keep in another", %{conn: conn, sleeper: sleeper} do
