@@ -151,14 +151,17 @@ defmodule SleeperPlayerApiWeb.LeagueRankingController do
 
   # Only the league's rostered players: the rankings read nothing else, and
   # the full season is ~3,300 rows of stats.
+  #
+  # Available means the season is stored, not that this league's rows are
+  # non-empty: a league that has not drafted rosters nobody, so it reads no
+  # rows, and calling that "projections unavailable" would be false - every
+  # team simply projects to zero, as it did when the app ranked in the
+  # browser.
   defp projections_input(season, player_ids) do
-    case RefreshProjections.ensure(season) && Intel.projections(season, player_ids) do
-      rows when is_list(rows) and rows != [] ->
-        {rows, nil}
-
-      _ ->
-        {nil,
-         %{id: "projections", reason: "Sleeper has no #{season} projections for this league"}}
+    if RefreshProjections.ensure(season) do
+      {Intel.projections(season, player_ids), nil}
+    else
+      {nil, %{id: "projections", reason: "Sleeper has no #{season} projections"}}
     end
   end
 

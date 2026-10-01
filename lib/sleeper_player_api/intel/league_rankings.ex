@@ -59,7 +59,9 @@ defmodule SleeperPlayerApi.Intel.LeagueRankings do
 
     sources =
       case input[:projections] do
-        rows when is_list(rows) and rows != [] ->
+        # A list, even an empty one, is projections that were available;
+        # only nil is projections that were not. See the controller.
+        rows when is_list(rows) ->
           scoring = league["scoring_settings"]
           points = Projections.projection_values(rows, scoring)
           adp = Projections.adp_values(rows, superflex, scoring && scoring["rec"])
