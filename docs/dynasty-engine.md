@@ -312,6 +312,25 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
   rebuilders favor Future value and picks. Score by the improvement to both
   sides' lineups.
 
+- **Window-aware trades built, 2026-10-01** (rghart/sleeper-player-be#74),
+  step 1 of 2. `Intel.TradeWindow` values one side of a trade in its window,
+  as a share of the league average:
+  - **contender:** the change in its best lineup on projected points (KTC
+    if none);
+  - **rebuilder:** the change in future capital, meaning KTC of players
+    short of their age cliff, plus picks;
+  - **middle:** the mean of both.
+
+  `/trades` loads the shared snapshot and, when the league can be ranked,
+  orders suggestions by the smaller side's gain, then fit
+  (`windowAware: true`, `myWindow`, `theirWindow`, `mutualGain`). When it
+  can't, it still suggests, ordered by fit. Fairness and fit remain the
+  gates. The snapshot now checks KTC straight after the league and stops
+  before any other reads.
+- **Step 2 (next):** the trade shape windows make possible: a rebuilder's
+  aging starter for a contender's picks (the M2 sell list, priced into
+  offers).
+
 ### M5: `dynasty-agent` (Python), deferred
 
 Scaffolded only after M1–M4 endpoints are stable. Tools are the engine

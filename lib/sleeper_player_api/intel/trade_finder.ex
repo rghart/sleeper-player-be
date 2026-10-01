@@ -44,6 +44,13 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
   is nearly fair but one side is light, the light side may add one pick to
   close the gap. Fit is still decided entirely by the players.
 
+  **Windows, when given.** With `opts.window_gain` (see
+  `Intel.TradeWindow`), each suggestion also carries what it is worth to each
+  side *in its window* - a contender's lineup now, a rebuilder's future - and
+  suggestions are ranked by the smaller of the two gains, then by fit: the
+  trade both sides gain most from first. Without it, ranking is by fit alone,
+  as before. Fairness and fit stay the gates either way.
+
   The model is still crude and still says so: it counts bodies, not quality,
   and does not run a lineup optimiser, so FLEX is not modelled. SUPER_FLEX
   *is* counted as a quarterback slot for the starting requirement, matching
@@ -90,7 +97,11 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
     # Computed over every roster in the league, including the asking one:
     # "deep" is a claim about standing out, so the comparison group has to be
     # everyone. See the moduledoc for why this replaced a starter-count test.
-    opts = Map.put(opts, :league_average, league_average([mine | others], opts))
+    opts =
+      opts
+      |> Map.put(:league_average, league_average([mine | others], opts))
+      |> Map.put(:my_user_id, mine.user_id)
+
     my_depth = depth(mine.player_ids, opts)
 
     others
@@ -99,8 +110,14 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
       |> suggestions_against(theirs, my_depth, opts)
       |> Enum.take(per_partner)
     end)
-    |> Enum.sort_by(& &1.fit, :desc)
+    |> Enum.sort_by(&rank_key/1, :desc)
   end
+
+  # Mutual window gain first when there is one, then fit. A suggestion with
+  # no window (none given, or a side the window does not know) sorts after
+  # every one that has it, by fit among themselves.
+  defp rank_key(%{mutual_gain: gain, fit: fit}) when is_number(gain), do: {1, gain, fit}
+  defp rank_key(%{fit: fit}), do: {0, 0, fit}
 
   @doc """
   Mean bodies per roster at each tradeable position, across the league.
@@ -135,7 +152,7 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
 
     pairs
     |> Enum.flat_map(&score(&1, theirs, my_depth, their_depth, opts))
-    |> Enum.sort_by(& &1.fit, :desc)
+    |> Enum.sort_by(&rank_key/1, :desc)
   end
 
   defp one_for_one(mine, theirs), do: for(a <- mine, b <- theirs, do: {[a], [b]})
@@ -173,7 +190,8 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
       {give_picks, get_picks} = sweetener
 
       [
-        %{
+        windows(opts, theirs, give, get, give_picks, get_picks)
+        |> Map.merge(%{
           partner_id: to_string(theirs.user_id),
           partner_name: theirs.display_name,
           give: give,
@@ -187,10 +205,29 @@ defmodule SleeperPlayerApi.Intel.TradeFinder do
           my_fit: my_fit,
           their_fit: their_fit,
           fit: my_fit + their_fit
-        }
+        })
       ]
     else
       _ -> []
+    end
+  end
+
+  # Each side's gain in its window, and the smaller of the two, when the
+  # caller gave a window. Empty otherwise, so the suggestion is as before.
+  defp windows(opts, theirs, give, get, give_picks, get_picks) do
+    case opts[:window_gain] do
+      nil ->
+        %{}
+
+      gain ->
+        mine = gain.(opts.my_user_id, give, get, give_picks, get_picks)
+        their = gain.(theirs.user_id, get, give, get_picks, give_picks)
+
+        mutual =
+          if mine && their && is_number(mine.gain) && is_number(their.gain),
+            do: min(mine.gain, their.gain)
+
+        %{my_window: mine, their_window: their, mutual_gain: mutual}
     end
   end
 
