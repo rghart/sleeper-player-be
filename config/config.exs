@@ -120,6 +120,22 @@ config :sleeper_player_api, SleeperPlayerApi.Intel.SellSignals,
   min_value: 2500,
   buyer_max_z: -0.25
 
+# Market draft corpus for ADP from real drafts (docs/dynasty-engine.md, M3).
+# Sized 2026-10-01 against the VM: 949MB RAM (~330MB free), 13GB disk free.
+# 1,500 calls is ~5 minutes at the 300/min limiter; at 150 complete drafts
+# per format bucket the corpus tops out near 1,200 drafts, ~50MB.
+config :sleeper_player_api, SleeperPlayerApi.Tasks.CrawlMarketDrafts,
+  calls_per_run: 1_500,
+  target_per_bucket: 150,
+  revisit_days: 30
+
+# Which drafts count: completed dynasty drafts with at least 8 teams from the
+# last year; a startup is an all-players draft of 15+ rounds.
+config :sleeper_player_api, SleeperPlayerApi.Market.Format,
+  startup_min_rounds: 15,
+  min_teams: 8,
+  window_days: 365
+
 # Quantum cron jobs. Times are UTC; Central is UTC-5.
 #
 # Ordering matters: the player dump runs first because the intel crawler
@@ -199,6 +215,16 @@ config :sleeper_player_api, SleeperPlayerApi.Scheduler,
       name: :crawl_leaguemate_transactions,
       schedule: "30 9 * * *",
       task: {SleeperPlayerApi.Tasks.CrawlLeaguemateTransactions, :crawl_configured_leagues, []},
+      overlap: false
+    ],
+
+    # 5:15am Central — grow the market draft corpus (M3). Last and on its
+    # own, after the transaction sweep has finished with the rate limiter,
+    # because at up to 1,500 calls it is the longest job of the night.
+    [
+      name: :crawl_market_drafts,
+      schedule: "15 10 * * *",
+      task: {SleeperPlayerApi.Tasks.CrawlMarketDrafts, :run, []},
       overlap: false
     ]
   ]
