@@ -118,12 +118,16 @@ defmodule SleeperPlayerApiWeb.LeagueRankingJSON do
   # a caller can see how close a non-contender is too; `aging` is only
   # answered for contenders, where the question means something.
   defp window(team, player_info) do
-    share = Aging.lineup_share(team.lineups[:ktc], player_info)
+    {lineup, source} = Aging.aging_lineup(team)
+    share = Aging.lineup_share(lineup, player_info)
 
     %{
       tier: team.tiers[:blend],
       aging: Aging.aging?(team.tiers[:blend], share),
       agedShare: share,
+      # Which lineup the share was measured on: "proj" (this season's
+      # points), or "ktc" when there were no projections.
+      agedShareSource: source && to_string(source),
       agingShareThreshold: Aging.aging_share()
     }
   end

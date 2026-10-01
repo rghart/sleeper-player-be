@@ -316,7 +316,8 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
       assert strong["tier"] == team(body, 1)["tier"]
       assert strong["agedShare"] == 0
       assert strong["aging"] == false
-      assert strong["agingShareThreshold"] == 0.4
+      assert strong["agingShareThreshold"] == 0.25
+      assert strong["agedShareSource"] == "proj"
 
       # A quarter of team 3's lineup value is its 28-year-old RB, but it is
       # not contending, so "aging" is not answered for it.
@@ -348,7 +349,7 @@ defmodule SleeperPlayerApiWeb.LeagueRankingControllerTest do
       body = conn |> get(~p"/api/v1/leagues/#{@league}/sells") |> json_response(200)
 
       assert body["rules"]["ageCutoffs"]["RB"] == 26
-      assert body["rules"]["minValue"] == 1000
+      assert body["rules"]["minValue"] == 2500
 
       # Only teams that are not contending are listed.
       refute Enum.any?(body["teams"], &(&1["tier"] in ["contender", "all-in"]))

@@ -170,17 +170,24 @@ leagues, and the #188 preview rendered correctly against it.
   team: each position group's blended z, z per source, and KTC value against
   the league median, plus `deficits` and `surpluses` at |z| ≥ 0.5 (config).
 - **Window:** the five tiers, not terciles. Each team in `/rankings` gains a
-  `window`: tier, `agedShare` (share of KTC starting value past the age
-  cliff), and `aging` (contenders only, true at ≥ 40%, config).
+  `window`: tier, `agedShare` (share of projected starting points past the
+  age cliff, falling back to KTC), and `aging` (contenders only, true at
+  ≥ 25%, config).
 - **Sells:** `Intel.SellSignals` handles Middle, Rebuilding and Stuck
   teams. A candidate is a rostered player at or past his position's cutoff
-  (RB 26, WR 29, TE 30, QB 33) worth ≥ 1,000 KTC. Each candidate is paired
-  with the contenders whose lineup is below average (z ≤ 0) at his group or
-  at FLEX, neediest first. `GET /api/v1/leagues/:id/sells` returns the rules
+  (RB 26, WR 29, TE 30, QB 33) worth ≥ 2,500 KTC. Each candidate is paired
+  with the contenders whose lineup is thin (z ≤ −0.25) at his group or at
+  FLEX, neediest first. `GET /api/v1/leagues/:id/sells` returns the rules
   it used beside the list.
-- **Still to do:** tune the cutoffs, 40% and 1,000 against real leagues.
-  Move the app's "Starters vs you" bars to `/weaknesses` and delete
-  `groupStrength`.
+- **Tuned 2026-10-01 on Ryan's five leagues** (rghart/sleeper-player-be#65).
+  The first guesses (40% of KTC value, 1,000 KTC, buyer z ≤ 0) flagged no
+  contender as aging and listed 210 sells. KTC already discounts age, so
+  aging moved to projections: shares ran 6–37%, and 25% flags 5 of 17
+  contenders. Sells at 2,500 / −0.25 list 62 across the five leagues, about
+  one per team with a real buyer. The age cutoffs themselves are still the
+  spec's; the deferred research pass is where they'd be checked.
+- **Still to do:** move the app's "Starters vs you" bars to `/weaknesses`
+  and delete `groupStrength`.
 
 ### M3: ADP from real drafts
 

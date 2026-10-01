@@ -8,8 +8,16 @@ defmodule SleeperPlayerApi.Intel.Aging do
 
     * `SellSignals` lists players past their cutoff on teams that are not
       contending.
-    * `lineup_share/3` says how much of a contender's starting value is past
+    * `lineup_share/2` says how much of a contender's starting value is past
       it, and `aging?/2` flags the team when that share is high.
+
+  The share is measured on **projected points** where there are any: the
+  question is how much of this season's production comes from players about
+  to decline. KeepTradeCut is the fallback, but a poor measure of this,
+  because it already discounts age - a lineup of veterans looks weak by KTC
+  and drops out of the contender tiers before the flag can apply.
+
+  `lineup_share/2` is told which lineup to read; `aging_lineup/1` picks it.
 
   The cutoffs are per position because age curves are: a 31-year-old
   quarterback is in his prime and a 27-year-old running back is not, which
@@ -21,7 +29,7 @@ defmodule SleeperPlayerApi.Intel.Aging do
   """
 
   @default_cutoffs %{"QB" => 33, "RB" => 26, "WR" => 29, "TE" => 30}
-  @default_aging_share 0.4
+  @default_aging_share 0.25
 
   @doc "The age at which each position is past its cliff, from config."
   def cutoffs do
@@ -70,8 +78,20 @@ defmodule SleeperPlayerApi.Intel.Aging do
   end
 
   @doc """
+  The lineup to measure a team's aging on, and its source id: projections
+  when the team was ranked on them, else KeepTradeCut.
+  """
+  def aging_lineup(team) do
+    cond do
+      lineup = team.lineups[:proj] -> {lineup, :proj}
+      lineup = team.lineups[:ktc] -> {lineup, :ktc}
+      true -> {nil, nil}
+    end
+  end
+
+  @doc """
   Whether a team is an aging contender: strong now (Contender or All-in) with
-  at least `aging_share/0` of its KeepTradeCut lineup value past the cliff.
+  at least `aging_share/0` of its lineup (see `aging_lineup/1`) past the cliff.
   Nil for a team that is not contending, where the question does not arise.
   """
   def aging?(tier, share) when tier in ["contender", "all-in"],
