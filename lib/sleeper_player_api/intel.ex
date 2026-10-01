@@ -282,11 +282,11 @@ defmodule SleeperPlayerApi.Intel do
   def record_value_history(values) do
     rows =
       values
-      # KTC's TE-premium variants are current values only. The history table
-      # is already the largest in the database, and a tight end's tiered
-      # series moves with his base one, so a second copy of it would be size
-      # without information.
-      |> Enum.reject(&(is_binary(&1[:source]) and KeepTradeCut.tep_source?(&1.source)))
+      # KTC's variants (TE-premium tiers, and the trade-based and blended
+      # bases) are current values only. The history table is already the
+      # largest in the database, and the crowdsourced series is the one the
+      # app's movement reads.
+      |> Enum.reject(&(is_binary(&1[:source]) and KeepTradeCut.variant_source?(&1.source)))
       |> Enum.flat_map(&history_row/1)
       |> Enum.reduce(%{}, fn row, acc ->
         Map.put(acc, {row.player_id, row.source, row.day}, row)
@@ -693,6 +693,25 @@ defmodule SleeperPlayerApi.Intel do
       }
     )
     |> Repo.all()
+  end
+
+  @doc """
+  The KeepTradeCut source the engine reads for a format's crowdsourced
+  source (`keeptradecut:sf`): the configured value basis (`:ktc_basis`,
+  default `"blend"` - KTC's mix of crowdsourced and real-trade values), or
+  the crowdsourced list itself until the configured basis has been stored.
+  The fallback is what keeps a deploy from blanking the rankings in the hour
+  before the next KTC refresh writes the new basis.
+  """
+  @spec ktc_source(String.t()) :: String.t()
+  def ktc_source(format_source) do
+    basis = Application.get_env(:sleeper_player_api, :ktc_basis, "blend")
+    candidate = KeepTradeCut.basis_source(format_source, basis)
+
+    if candidate != format_source and
+         Repo.exists?(from(pv in PlayerValue, where: pv.source == ^candidate)),
+       do: candidate,
+       else: format_source
   end
 
   @doc """

@@ -74,7 +74,10 @@ defmodule SleeperPlayerApi.Intel.LeagueSnapshot do
     # users, drafts, FantasyCalc, traded picks and projections on the league.
     with {:ok, league} <- fetch_league(league_id),
          settings = MarketSettings.from_league(league),
-         ktc_source = if(MarketSettings.superflex?(settings), do: @superflex, else: @one_qb),
+         format_source = if(MarketSettings.superflex?(settings), do: @superflex, else: @one_qb),
+         # The configured value basis (crowd, trades or blend), stored under
+         # its own source; `Intel.ktc_source/1` falls back to crowd until then.
+         ktc_source = Intel.ktc_source(format_source),
          tep = MarketSettings.ktc_tep_level(league),
          {:ok, ktc, ktc_as_of} <- require_ktc(ktc_source, tep),
          {:ok, rosters} <- fetch(league_id, "rosters"),

@@ -47,8 +47,11 @@ defmodule SleeperPlayerApiWeb.TradeController do
       # KTC's TE-premium tier for this league, so a tight end is priced the
       # way the league scores him (`MarketSettings.ktc_tep_level/1`).
       tep = MarketSettings.ktc_tep_level(league)
-      values = value_lookup(source, tep)
-      pick_values = pick_value_lookup(source)
+      # The engine's value basis for this format (blend by default), the
+      # same list the rankings and trade ideas price on.
+      values_source = Intel.ktc_source(source)
+      values = value_lookup(values_source, tep)
+      pick_values = pick_value_lookup(values_source)
 
       # Picks are keyed to rosters by Sleeper and to managers by this app, so
       # the holdings are re-keyed by owning user before the finder sees them.
@@ -91,7 +94,7 @@ defmodule SleeperPlayerApiWeb.TradeController do
           else: opts
 
       render(conn, :index,
-        source: source,
+        source: values_source,
         tep: tep,
         league_id: league_id,
         window_aware: window_context != nil,

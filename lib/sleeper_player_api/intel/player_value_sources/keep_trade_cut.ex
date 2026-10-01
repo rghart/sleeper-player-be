@@ -75,8 +75,40 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   # for which tier a league gets.
   @tep_levels ~w(tep tepp teppp)
 
+  # KTC's three value bases, and the keys each is read from. "crowd" is its
+  # crowdsourced value, what this app has always stored under the plain
+  # source names; "trades" is its value from real trades (`vft`); "blend" is
+  # KTC's own mix of the two. Checked 2026-10-01: every player, pick and TE
+  # tier carries all three, and they differ most on picks (a 2027 early 1st
+  # at 7,089 crowdsourced, 5,895 from trades).
+  @bases %{
+    "crowd" => {"value", "rank", "positionalRank"},
+    "trades" => {"vftValue", "vftRank", "vftPositionalRank"},
+    "blend" => {"blendValue", "blendRank", "blendPositionalRank"}
+  }
+
   @doc "KTC's TE-premium tiers, mildest first."
   def tep_levels, do: @tep_levels
+
+  @doc "KTC's value bases: crowd, trades, blend."
+  def bases, do: Map.keys(@bases) |> Enum.sort()
+
+  @doc """
+  The source a value basis is stored under. Crowdsourced keeps the plain
+  name (`keeptradecut:sf`), so everything that read KTC before reads exactly
+  what it did; the others add the basis (`keeptradecut:sf:blend`).
+  """
+  def basis_source(format_source, "crowd"), do: format_source
+
+  def basis_source(format_source, basis) when is_map_key(@bases, basis),
+    do: "#{format_source}:#{basis}"
+
+  @doc """
+  Whether a source is a variant (a TE tier or a non-crowd basis) rather than
+  one of the two crowdsourced lists. Variants are current values only.
+  """
+  def variant_source?(source) when is_binary(source),
+    do: tep_source?(source) or String.contains?(source, [":trades", ":blend"])
 
   @doc "The source a TE-premium tier is stored under: `keeptradecut:sf:tep`."
   def tep_source(base, level) when level in @tep_levels, do: "#{base}:#{level}"
@@ -153,25 +185,24 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
     Enum.flat_map(players, fn player ->
       case parse_pick(player["playerName"]) do
         {:ok, {season, tier, round}} ->
-          [{@one_qb, player["oneQBValues"]}, {@superflex, player["superflexValues"]}]
-          |> Enum.flat_map(fn
-            {_source, nil} ->
-              []
+          for {format, key} <- [{@one_qb, "oneQBValues"}, {@superflex, "superflexValues"}],
+              basis <- bases(),
+              is_map(player[key]),
+              is_number(player[key][elem(@bases[basis], 0)]) do
+            values = player[key]
+            {value_key, rank_key, position_rank_key} = @bases[basis]
 
-            {source, values} ->
-              [
-                %{
-                  season: season,
-                  round: round,
-                  tier: tier,
-                  source: source,
-                  value: to_float(values["value"]),
-                  overall_rank: values["rank"],
-                  position_rank: values["positionalRank"],
-                  as_of: now
-                }
-              ]
-          end)
+            %{
+              season: season,
+              round: round,
+              tier: tier,
+              source: basis_source(format, basis),
+              value: to_float(values[value_key]),
+              overall_rank: values[rank_key],
+              position_rank: values[position_rank_key],
+              as_of: now
+            }
+          end
 
         :error ->
           []
@@ -233,10 +264,10 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
     with mfl_id when not is_nil(mfl_id) <- to_id_string(player["mflid"]),
          sleeper_id when not is_nil(sleeper_id) <- Map.get(crosswalk, mfl_id),
          {player_id, ""} <- Integer.parse(sleeper_id) do
-      ([
-         entry(player_id, @one_qb, player["oneQBValues"], player, now),
-         entry(player_id, @superflex, player["superflexValues"], player, now)
-       ] ++ tep_entries(player_id, player, now))
+      (for {format, key} <- [{@one_qb, "oneQBValues"}, {@superflex, "superflexValues"}],
+           basis <- bases() do
+         entry(player_id, basis_source(format, basis), player[key], player, now, basis)
+       end ++ tep_entries(player_id, player, now))
       |> Enum.reject(&is_nil/1)
     else
       _ -> []
@@ -248,24 +279,44 @@ defmodule SleeperPlayerApi.Intel.PlayerValueSources.KeepTradeCut do
   # storing them would multiply the table for nothing. A lookup lays these
   # over the base list (`Intel.player_values_with_tep/2`).
   defp tep_entries(player_id, %{"position" => "TE"} = player, now) do
-    for {base, key} <- [{@one_qb, "oneQBValues"}, {@superflex, "superflexValues"}],
+    for {format, key} <- [{@one_qb, "oneQBValues"}, {@superflex, "superflexValues"}],
+        basis <- bases(),
         level <- @tep_levels,
         is_map(get_in(player, [key, level])) do
-      entry(player_id, tep_source(base, level), get_in(player, [key, level]), player, now)
+      source = format |> basis_source(basis) |> tep_source(level)
+      entry(player_id, source, get_in(player, [key, level]), player, now, basis)
     end
   end
 
   defp tep_entries(_player_id, _player, _now), do: []
 
-  defp entry(_player_id, _source, nil, _player, _now), do: nil
+  defp entry(_player_id, _source, nil, _player, _now, _basis), do: nil
 
-  defp entry(player_id, source, values, player, now) do
+  defp entry(player_id, source, values, player, now, basis) do
+    {value_key, rank_key, position_rank_key} = @bases[basis]
+
+    # A basis KTC does not send for this entry is no row at all, not a row
+    # with no value: an older payload, or one missing the trade-based figure,
+    # stores exactly the crowdsourced rows it always did.
+    if is_number(values[value_key]),
+      do:
+        entry_row(
+          player_id,
+          source,
+          values,
+          player,
+          now,
+          {value_key, rank_key, position_rank_key}
+        )
+  end
+
+  defp entry_row(player_id, source, values, player, now, {value_key, rank_key, position_rank_key}) do
     %{
       player_id: player_id,
       source: source,
-      value: to_float(values["value"]),
-      overall_rank: values["rank"],
-      position_rank: values["positionalRank"],
+      value: to_float(values[value_key]),
+      overall_rank: values[rank_key],
+      position_rank: values[position_rank_key],
       # See the moduledoc: KTC's liquidity figures are a different
       # measurement, not these two under another name.
       roster_percent: nil,

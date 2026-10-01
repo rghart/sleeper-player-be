@@ -348,14 +348,25 @@ Optional, low priority: Fantasy Football Calculator's public redraft ADP
 
   On the League of Boredom fixture each mode answers in 216–343 ms with
   shapes from 1-for-1 to 3-for-3 plus picks.
-- **Real trades, next:**
-  1. KTC's trade-based (`vftValue`) and blended values as a configurable
-     basis.
-  2. Calibrate the fairness band from the 1,540 real trades already in
-     `observed_transactions`.
-  3. A `market_trades` corpus across all league types, with its own crawl
-     budget (transactions are per league per week).
-  4. Comparable trades shown with each idea.
+- **Roadmap agreed 2026-10-01** after an on-track check. Trade work had
+  grown past the plan, so it's capped at the cheap, high-value items, and
+  then Phase 1 closes:
+  1. ✅ **KTC value basis** (rghart/sleeper-player-be#78). KTC publishes
+     crowdsourced, from-real-trades (`vft`) and blended values for every
+     player, pick and TE tier. All three are stored, and crowdsourced keeps
+     its plain source name and is the only one with history. The engine
+     reads `:ktc_basis`, default **blend**, falling back to crowdsourced
+     until the basis is stored. Crowdsourcing overrates picks against real
+     trades: a 2027 early 1st was 7,089 crowdsourced and 5,895 from trades.
+  2. **Calibrate the fairness band** from the 1,540 real trades already in
+     `observed_transactions`, valued on the day they happened.
+  3. **Redraft and keeper leagues:** classify every league and make each
+     endpoint behave by type (an original Phase 1 goal).
+  4. **Phase 2, the agent.**
+
+  Deferred: the app's Trades panel switch to `/trade-ideas`, a
+  `market_trades` corpus across league types (its own crawl budget, since
+  transactions are per league per week), and comparable trades per idea.
 
 ### M5: `dynasty-agent` (Python), deferred
 
